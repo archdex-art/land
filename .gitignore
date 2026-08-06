@@ -1,0 +1,5 @@
+# archterminal_docs is docs-only. Everything except Markdown is ignored by default.
+*
+!*.md
+!.gitignore
+!*/
