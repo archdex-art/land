@@ -3,6 +3,7 @@
 **Date:** August 2026
 **Author's stance:** written as founding engineer / CTO / PM — and deliberately, in §5, as a skeptical user.
 **Status:** pre-code. Nothing has been built. This is the document that decides *what* gets built.
+**Corrections:** factually corrected against `ArchTerminal-Review.md` (independent verification review, Aug 2026). Resolved: **DEBT-001** (METR/LinearB conflation, DORA 2025 added), **DEBT-002** (96%-trust figure re-attributed to Sonar), **DEBT-003** (regulatory-compliance wedge removed), **DEBT-004** (unverifiable tools removed), **DEBT-008** (Ghostty throughput stated as a range), **DEBT-009** (stale Claude Code / Cursor product facts).
 
 ---
 
@@ -10,8 +11,8 @@
 
 1. **The ChatGPT thread was built on a factual error.** It assumed "cmux" meant tmux. cmux is a real, funded product (Manaflow, YC S24) — a macOS-native terminal built on libghostty *specifically for running parallel AI coding agents*. It is not a multiplexer concept; it is a direct competitor that already shipped.
 2. **Warp open-sourced its client in April 2026** (AGPL-3.0 / MIT dual, ~60k GitHub stars, OpenAI as founding sponsor). The terminal UI is now a **commodity you can fork for free**. Warp's actual business is **Oz**, its proprietary cloud agent orchestrator. Building "a nicer Warp UI" in 2026 is building something your competitor gives away.
-3. Therefore: **do not build a terminal emulator.** Twelve-plus tools already do parallel-agent multiplexing. That category is crowded, commoditising, and losing its moat monthly.
-4. **The unsolved problem is the other direction.** Every tool on the market optimises *fan-out* — launching, isolating, and watching N agents. The 2026 data says the bottleneck moved to *fan-in*: PR review time is up **91%**, agentic PRs sit **5.3× longer** before pickup, **96%** of developers don't fully trust AI code, and AI-written code surfaces **1.7× more issues**. LinearB's analysis of 8.1M PRs found developers *feel* 20% faster and are measurably **19% slower**.
+3. Therefore: **do not build a terminal emulator.** Ten-plus tools already do parallel-agent multiplexing. That category is crowded, commoditising, and losing its moat monthly.
+4. **The unsolved problem is the other direction.** Every tool on the market optimises *fan-out* — launching, isolating, and watching N agents. The 2026 data says the bottleneck moved to *fan-in*: PR review time is up **91%**, agentic PRs sit **5.3× longer** before pickup (LinearB, 8.1M PRs across 4,800 orgs), **96%** of developers don't fully trust AI code (Sonar, n=1,100), and AI-written code surfaces **1.7× more issues**. Separately, METR's July 2025 RCT (**n=16** experienced OSS developers on familiar repos) found participants were **19% slower** while believing they were **20% faster** — a small sample, but the only controlled experiment we have. DORA 2025, at industry scale, points the same way from a different angle: AI adoption correlates with *higher delivery instability*, because generation outpaces the verification gates.
 5. **The wedge: SuperTerminal is the fan-in console.** Not "run more agents" — **"trust and land the agents you already ran."** Two defensible primitives: (a) **semantic conflict prediction across parallel agents** using a code graph, and (b) **evidence bundles** that make an agent's work reviewable in 90 seconds instead of 40 minutes.
 6. This is the only framing where your existing assets (CodeGraph, SuperSearch, AgentMesh) are a *moat* rather than a distraction, and it's the only one a small team can ship in 8–10 weeks rather than 18 months.
 
@@ -62,19 +63,19 @@ Three layers. Value is draining out of the bottom two and pooling at the top.
 │  Nobody owns this. This is the opportunity.                  │
 ├──────────────────────────────────────────────────────────────┤
 │  LAYER 2 — ORCHESTRATION / FAN-OUT          ←  CROWDED       │
-│  amux · cmux · dmux · workmux · ittybitty · Termdock ·       │
-│  Superset · Conductor · Sculptor · Vibe Kanban · Warp Oz ·   │
-│  Claude Code Agent Teams · Cursor BG Agents · Devin ·        │
-│  OpenHands                    (12+ tools, ~18 months old)    │
+│  amux · cmux · dmux · workmux · Termdock · Conductor ·       │
+│  Sculptor · Vibe Kanban · Warp Oz · Claude Code Agent        │
+│  Teams · Cursor Cloud Agents · Devin · OpenHands             │
+│                               (10+ tools, ~18 months old)    │
 ├──────────────────────────────────────────────────────────────┤
 │  LAYER 1 — TERMINAL EMULATION               ←  COMMODITISED  │
-│  Ghostty (Zig, ~4× iTerm2 throughput, libghostty embeddable) │
+│  Ghostty (Zig, 2–5× iTerm2 throughput, libghostty embeddable)│
 │  Warp client (now MIT/AGPL) · WezTerm · Kitty · Alacritty    │
 │  tmux · Zellij               (free, mature, forkable)        │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-The critical structural fact: **Layer 2 is being absorbed by the model vendors.** Claude Code ships `--agent-teams` (parallel sub-agents in worktrees, zero install). Cursor ships Background Agents. Warp ships Oz. When the people who sell the tokens give away the orchestration, third-party orchestrators become a features-race with no floor. Vibe Kanban's parent company (Bloop) already shut down in April 2026 and the project went community-maintained. That is what a commoditising category looks like from the inside.
+The critical structural fact: **Layer 2 is being absorbed by the model vendors.** Claude Code ships `--agent-teams` (parallel sub-agents in worktrees) — experimental, and gated behind `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`, but shipping in the product you already pay for. Cursor ships **Cloud Agents** (renamed from Background Agents), which run in its cloud VMs. Warp ships Oz. When the people who sell the tokens give away the orchestration, third-party orchestrators become a features-race with no floor. Vibe Kanban's parent company (Bloop) already shut down in April 2026 and the project went community-maintained. That is what a commoditising category looks like from the inside.
 
 **Do not enter Layer 2.** Enter Layer 3, and consume Layer 1 and 2 as inputs.
 
@@ -110,32 +111,31 @@ Understanding mechanism, not features, is what tells you where the structural we
 
 *(Caveat: the best comparison matrix in the category is published by amux itself and is not neutral. Treat its self-ratings accordingly.)*
 
-### 3.4 The worktree-thin-layer cluster — dmux, workmux, ittybitty
+### 3.4 The worktree-thin-layer cluster — dmux, workmux
 
-**Mechanism.** `git worktree add` per agent + tmux pane per agent. ittybitty is ~200 lines of bash. workmux takes YAML task definitions. dmux is `dmux run <prompt>` and fans out.
+**Mechanism.** `git worktree add` per agent + tmux pane per agent, and almost nothing else. workmux takes YAML task definitions. dmux is `dmux run <prompt>` and fans out.
 
-**Right:** worktrees are the correct isolation primitive for local parallel agents, and these tools prove the whole category is ~200 lines of glue. That should worry anyone building a *large* product in Layer 2.
+**Right:** worktrees are the correct isolation primitive for local parallel agents, and these tools prove the whole category is a few hundred lines of glue. That should worry anyone building a *large* product in Layer 2.
 
 **Structural weakness — and this is the important one:** worktrees prevent **git** conflicts. They do nothing about **semantic** conflicts. Agent A renames `parse_config()`; agent B, in a different worktree, adds three call sites to it. Both branches merge cleanly. `main` is broken. **Nobody in this entire market solves that.** Hold this thought — it's §6.
 
-### 3.5 Conductor / Superset / Termdock / Sculptor
+### 3.5 Conductor / Termdock / Sculptor
 
 - **Conductor** — YC, $22M Series A, Mac desktop, parallel Claude Code/Codex/Cursor in isolated workspaces, Linear integration. Mac-only (Windows waitlist), single-player, closed.
-- **Superset** — "code editor for AI agents," GUI + worktrees + cost tracking, local and cloud.
 - **Termdock** — Electron, cross-platform, per-session CPU/RAM, basic health checks, web session viewer.
 - **Sculptor** — the only one using **containers rather than worktrees**. Stronger isolation; a genuinely different bet, and the right one if you care about agents that run `rm`, install packages, or mutate global state.
 
-**Pattern across all four:** the interface metaphor differs (board vs. tabs vs. panes vs. GUI) but the model is identical — *spawn, isolate, watch, hand off to GitHub*. The handoff to GitHub is where every one of them ends and where the human's pain begins.
+**Pattern across all three:** the interface metaphor differs (board vs. panes vs. GUI) but the model is identical — *spawn, isolate, watch, hand off to GitHub*. The handoff to GitHub is where every one of them ends and where the human's pain begins.
 
-### 3.6 Cloud platforms — Devin, OpenHands, Cursor BG
+### 3.6 Cloud platforms — Devin, OpenHands, Cursor Cloud Agents
 
-Devin ($500+/mo) is the fully-managed end: own sandbox, browser, editor, Linear/Jira/Slack integration, knowledge base. OpenHands is the self-hosted open-source equivalent (Docker per agent, micro-agent delegation). Cursor Background Agents run in Cursor's cloud, branch per agent, PR at the end — but can't touch your local DB, tooling or env.
+Devin ($500+/mo) is the fully-managed end: own sandbox, browser, editor, Linear/Jira/Slack integration, knowledge base. OpenHands is the self-hosted open-source equivalent (Docker per agent, micro-agent delegation). Cursor's **Cloud Agents** (renamed from Background Agents) run in Cursor's cloud VMs, branch per agent, PR at the end — but can't touch your local DB, tooling or env.
 
 **Structural weakness of the whole cloud tier:** your code runs on someone else's machine, and the environment is never quite your environment. This is why local tools continue to exist despite being objectively more work.
 
 ### 3.7 Layer 1, briefly
 
-Ghostty (Zig) is the emulator to beat — ~4× iTerm2 throughput in sustained output, and crucially **libghostty is designed to be embedded**. cmux is the proof. WezTerm wins on Lua scriptability and built-in multiplexing; Kitty on its graphics protocol; Alacritty on minimalism; Zellij is now a credible modern tmux with WASM plugins.
+Ghostty (Zig) is the emulator to beat — benchmarks put it at **2–5× iTerm2** throughput in sustained output depending on workload, and crucially **libghostty is designed to be embedded**. cmux is the proof. WezTerm wins on Lua scriptability and built-in multiplexing; Kitty on its graphics protocol; Alacritty on minimalism; Zellij is now a credible modern tmux with WASM plugins.
 
 **Takeaway:** there is no rendering gap left to exploit. Anyone claiming a terminal is "faster" in 2026 is competing on a dimension users stopped feeling five years ago.
 
@@ -150,14 +150,15 @@ This is the part that should change your roadmap. Numbers from 2026 industry ana
 | Tasks completed with AI | **+21%** | Agents work. Fan-out is solved. |
 | PRs merged | **+98%** | Output roughly doubled. |
 | **PR review time** | **+91%** | The queue absorbed the entire gain. |
-| Agentic PR pickup time | **5.3× longer** | Humans actively avoid reviewing agent PRs. |
-| Developers who don't fully trust AI code accuracy | **96%** | Trust, not capability, is the binding constraint. |
+| Agentic PR pickup time (LinearB 2026, 8.1M PRs / 4,800 orgs) | **5.3× longer** | Humans actively avoid reviewing agent PRs. |
+| Developers who don't fully trust AI code accuracy (Sonar, n=1,100) | **96%** | Trust, not capability, is the binding constraint. Stack Overflow 2025 (n=49,000) measures it differently and agrees: **33%** trust AI output, **46%** actively distrust it. |
 | Issues in AI code vs human code | **1.7×** | The distrust is rational. |
-| Perceived vs. actual speed (8.1M PRs, 4,800+ orgs) | feel **+20%**, actually **−19%** | A 39-point self-deception gap. |
-| Experienced devs using agents | **−19% throughput** | Validation overhead exceeds generation savings. |
+| Perceived vs. actual speed (METR RCT, July 2025, **n=16** experienced OSS devs) | feel **+20%**, actually **−19%** | A 39-point self-deception gap. Small sample — but the only controlled experiment anyone has run. |
+| Experienced devs using agents (same METR RCT, n=16) | **−19% throughput** | Validation overhead exceeds generation savings. |
 | Junior devs using agents | **+10–30%** | They're not the ones doing the verifying. |
+| Delivery instability vs. AI adoption (DORA 2025) | **change-failure rate up** | The large-sample version of the same finding: generation is outpacing the verification gates. |
 
-Read those last two rows together. **AI coding tools currently make senior engineers slower.** The industry is shipping ever-better fan-out into a system whose fan-in capacity is fixed at "one human, one careful read."
+Read the two METR rows against the junior-developer row. **AI coding tools currently make senior engineers slower** — on a sample of sixteen, so hold the number loosely. DORA's industry-scale data is the load-bearing evidence: it measures the same failure at the level of delivery outcomes rather than individual throughput. Either way the industry is shipping ever-better fan-out into a system whose fan-in capacity is fixed at "one human, one careful read."
 
 Every dollar and every tool in Layer 2 makes this worse. That is a market begging for a product.
 
@@ -253,7 +254,7 @@ That last item deserves emphasis. Agents routinely report "I ran the tests and t
 
 Then the **Prove-It runner**: for a bug-fix branch, execute the failing case at `HEAD~` and at `HEAD`, and show the causal pair. Red → green, with receipts. That is the deliverable version of "replay," it works today, and it's a claim you can always keep.
 
-**Standards tailwind:** cryptographic pre-execution receipts and replayable provenance map onto ISO 42001 A.6.1.6, EU AI Act Article 12, and NIST Measure 2.5. That is your enterprise wedge in year two — regulated teams will need to *prove* what an agent did to their codebase, and no terminal will be able to tell them.
+**Why teams pay for this:** a standard, verifiable audit trail of what automated agents changed in the codebase. The buyers are internal governance ("who authorised this migration?"), incident forensics ("which of last night's six agent branches touched the auth path?"), and supply-chain review of agent-introduced dependency changes. Regulated customers will map that trail onto their own obligations — that is their work to do, not our pitch to make.
 
 ### 6.3 The surface: a risk-ranked review queue
 
@@ -317,7 +318,7 @@ CLI + local web UI. **No terminal. No agent runner. No plugins.**
 
 - Policy: "no agent branch merges without observed tests + zero predicted conflicts + no changes under `auth/`"
 - Team mode: shared queue, org-wide agent audit log
-- Compliance export (ISO 42001 / EU AI Act Art. 12 / NIST)
+- Exportable agent audit trail: signed, org-wide, queryable — for internal governance, incident forensics and supply-chain review
 - CI integration: run the conflict matrix pre-merge on GitHub
 
 ### v3 — *only if v0–v2 earn it*
@@ -380,7 +381,7 @@ Small, boring, and mostly assembled from existing parts.
 
 - **Free / OSS core.** The CLI, conflict engine and local UI. This is a developer-trust product; a closed core is fatal, and Warp just demonstrated the playbook.
 - **$15–25/mo Pro.** Hosted evidence bundles, shareable review links, cross-machine history, richer language coverage.
-- **$40–60/user/mo Team.** Shared merge queue, org audit log, policy gates, SSO, compliance export. This is where the revenue is — the buyer is an engineering manager watching review time climb 91%, and they have budget for exactly that pain.
+- **$40–60/user/mo Team.** Shared merge queue, org audit log, policy gates, SSO, audit-trail export. This is where the revenue is — the buyer is an engineering manager watching review time climb 91%, and they have budget for exactly that pain.
 
 Deliberately *under* Warp's $50 Business, and complementary rather than competitive — you want to be the thing teams buy *in addition to* their agent stack, never the thing they have to switch to.
 
@@ -390,12 +391,12 @@ Deliberately *under* Warp's $50 Business, and complementary rather than competit
 
 ## 11. Is this meaningful? — honest answer
 
-**As originally framed ("Warp + cmux + AI"): no.** It's feature aggregation against a free AGPL client with 60k stars, a YC-funded product that already shipped the exact combination, and twelve open-source tools that do the orchestration in 200 lines of bash. You'd spend 18 months to arrive at parity with things people already have for free.
+**As originally framed ("Warp + cmux + AI"): no.** It's feature aggregation against a free AGPL client with 60k stars, a YC-funded product that already shipped the exact combination, and a cluster of open-source tools that do the orchestration in a few hundred lines of shell. You'd spend 18 months to arrive at parity with things people already have for free.
 
 **As reframed (the fan-in console): yes** — and for three specific reasons.
 
-1. **It's a real, measured, worsening problem.** +91% review time and −19% senior throughput are not speculative. The industry has an acknowledged crisis and is currently pouring resources into making it worse.
-2. **It's genuinely unoccupied.** Fifteen tools compete on fan-out. Zero compete on fan-in. That's not an oversight you should assume is wisdom — it's a category that's only ~18 months old and everyone piled into the obvious half.
+1. **It's a real, measured, worsening problem.** +91% review time and 5.3× agentic-PR pickup delay are not speculative, and DORA 2025 ties AI adoption to rising change-failure rates at industry scale. The industry has an acknowledged crisis and is currently pouring resources into making it worse.
+2. **It's genuinely unoccupied.** Ten-plus tools compete on fan-out. Zero compete on fan-in. That's not an oversight you should assume is wisdom — it's a category that's only ~18 months old and everyone piled into the obvious half.
 3. **It's the one framing where your existing work is a moat.** CodeGraph is the wrong asset for a terminal and exactly the right asset for cross-branch semantic analysis. AgentMesh is the wrong asset for launching agents and the right one for coordinating verification. In the original plan those were nice-to-haves bolted onto a terminal; here they're the load-bearing walls.
 
 **Research angle, if that matters to you:** "cross-branch semantic conflict prediction for concurrent AI-generated changes" is a defensible, novel, publishable contribution with a clean evaluation methodology (build a corpus of parallel agent runs, measure predicted-vs-actual post-merge breakage). "Another AI terminal" is not.

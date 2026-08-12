@@ -1,0 +1,25 @@
+{
+  "name": "land",
+  "version": "0.1.0",
+  "description": "Fan-in console for parallel AI coding agents. Proves what an agent actually ran.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "land": "./src/cli.ts"
+  },
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "land": "node src/cli.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "typescript": "^5.9.3"
+  }
+}
