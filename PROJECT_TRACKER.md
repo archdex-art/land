@@ -9,7 +9,7 @@
 | **Tracker version** | 1.2.0 |
 | **Last updated** | 2026-08-13T02:45:00Z |
 | **Phase** | **M1 — Evidence** (shipped + audited; HTML report added) |
-| **Lines of product code** | **2,896** src · **555** test (35 tests) |
+| **Lines of product code** | **2,913** src · **632** test (40 tests) |
 | **Version control** | ✅ git, `DEBT-007` closed |
 | **Documents** | `README.md`, `ArchTerminal-Research.md`, `ArchTerminal-Review.md`, `PROJECT_TRACKER.md` |
 
@@ -127,12 +127,12 @@ Gate A: *the badge fires correctly across 10 real sessions, with zero false accu
 | True positive | An agent wrote *"Lint clean, 27 tests pass"* while `ruff` printed `Found 1 error.` The test half was true; the lint half was not. |
 | Evidence store | 2,336 events, hash chain verifies; tamper detected at the mutated row with exit 2 |
 | Secrets redacted at write time | 83, including a live Upstash Redis REST token |
-| Tests | **35**, all passing; `tsc --noEmit` clean |
-| Surfaces | terminal (`queue`, `evidence`) + **self-contained HTML report** (`ui`), both from one `groupBranches` code path |
+| Tests | **40**, all passing; `tsc --noEmit` clean |
+| Surfaces | terminal · self-contained HTML report · `--json` — all three from one `groupBranches` code path, asserted in tests |
 
 **Two false accusations were found and fixed during the run**, both from treating the word "check" as test vocabulary (*"the no-duplicate-names check already passed"*, *"its gradient check passing < 1e-5"*). Both are recorded as regression comments in `src/claims.ts`. A third defect was worse than a false accusation and is recorded in `src/reconcile.ts`: a user-**denied** `npm test` was being admitted as evidence *supporting* a claim that tests passed.
 
-**A second defect round came from auditing the shipped code** (`DEBT-018`–`DEBT-022`, `LOG-0006`). Two mattered: repo grouping keyed on `basename(cwd)` merged unrelated repositories that share a trailing directory name, and the badge's `+N more` counted only same-verdict findings — so one contradiction beside seven unverifiable claims rendered no suffix at all. Neither was visible from reading the code; both surfaced from running it against the real corpus and reading the output as a user would.
+**A second defect round came from auditing the shipped code and smoke-testing every surface** (`DEBT-018`–`DEBT-026`, `LOG-0006`). The three that mattered: repo grouping keyed on `basename(cwd)` merged unrelated repositories sharing a trailing directory name; the badge's `+N more` counted only same-verdict findings, so one contradiction beside seven unverifiable claims rendered no suffix at all; and `--json` reported 18 rows where the terminal reported 11 *while always exiting 0*, so the CI gate the README promised did not exist. None was visible from reading the code. All surfaced from running it and reading the output as a user would.
 
 ---
 
@@ -296,10 +296,14 @@ Documentation debt from the review is now closed. New entries below it are **cod
 | `DEBT-016` | **`opaqueExecutors` triggers session-wide abstention**, not per-activity. One MCP eval tool suppresses accusations about lint as well as tests | 🟡 | ⬜ Open | `src/reconcile.ts` | Acceptable while precision is the binding constraint; narrow when recall starts mattering |
 | `DEBT-017` | **Single-agent format only.** Codex, Cursor (SQLite `state.vscdb`), opencode (SQLite), Aider (markdown) are unsupported, so `LIM-005` bites immediately outside Claude Code | 🟠 | ⬜ Open | `src/transcript.ts` | `F-019`; the `Session` type is already format-agnostic |
 | `DEBT-018` | **Branch names were rendered unsanitised.** Git emits coloured names via `color.branch`; an embedded ANSI reset terminated styling early and the escape bytes counted toward padding width | 🟡 | ✅ **Fixed 2026-08-13** | `src/render.ts` | `stripAnsi` before grouping; truncate to terminal width |
-| `DEBT-019` | **Repo grouping keyed on `basename(cwd)`.** Two repos sharing a trailing directory name (`client/app`, `server/app`) merged into one row and reported a single verdict for unrelated work | 🟠 | ✅ **Fixed 2026-08-13** | `src/reconcile.ts`, `src/render.ts` | Key on full `cwd`; keep `basename` for display only |
+| `DEBT-019` | **Repo grouping keyed on `basename(cwd)`.** Two repos sharing a trailing directory name (`client/app`, `server/app`) merged into one row and reported a single verdict for unrelated work | 🟠 | ✅ **Fixed 2026-08-13** | `src/reconcile.ts`, `src/render.ts` | Key on full `cwd`; label with the shortest unique suffix (`DEBT-023`) |
 | `DEBT-020` | **Transcript reads had no I/O error boundary.** A transcript deleted between discovery and read raised an unhandled rejection and killed the process mid-run | 🟠 | ✅ **Fixed 2026-08-13** | `src/transcript.ts` | `try`/`catch` around stream creation and the read loop; return partial evidence |
 | `DEBT-021` | **Badge `+N more` counted only same-verdict findings.** One contradiction beside seven unverifiable claims rendered no suffix at all, so a reader infers one finding total | 🟠 | ✅ **Fixed 2026-08-13** | `src/reconcile.ts` | `N of M claims` — both numbers stated, neither implied |
 | `DEBT-022` | **Redaction missed 12 modern platform credential families** (Supabase, GitLab, SendGrid, Twilio, Linear, DigitalOcean, Shopify, Figma, Groq, OpenRouter, xAI, Doppler) | 🟠 | ✅ **Fixed 2026-08-13** | `src/redact.ts` | Distinctive-prefix rules only; shape-plus-nearby-word rules rejected as false-positive machines |
+| `DEBT-023` | **First fix for `DEBT-019` traded one defect for another.** Labelling with `relative(cwd, …)` rendered `../../../Users/me/Desktop/…` from `/tmp`, changed with the caller's location, and leaked the reviewer's home directory into a shared HTML report | 🟠 | ✅ **Fixed 2026-08-13** | `src/reconcile.ts` | `shortestUniqueLabels` — grows each path only as far as *that* path needs; cwd-independent |
+| `DEBT-024` | **Three surfaces recomputed grouping independently.** `renderQueue` reimplemented what `groupBranches` owned and `reconcile.ts` documents as shared "deliberately" | 🟠 | ✅ **Fixed 2026-08-13** | `src/render.ts` | Deleted 46 lines; `renderQueue` consumes `groupBranches` |
+| `DEBT-025` | **`land queue --json` reported sessions under a key named `branches`** — 18 rows against the terminal's 11 for identical input | 🟠 | ✅ **Fixed 2026-08-13** | `src/cli.ts` | Consumes `groupBranches`; invariant asserted in tests |
+| `DEBT-026` | **`--json` always exited 0**, so the CI gate the README promises did not exist: piping to a machine consumer silently disabled the signal | 🔴 | ✅ **Fixed 2026-08-13** | `src/cli.ts` | Exit code is now format-independent |
 
 ---
 
@@ -361,7 +365,7 @@ Documentation debt from the review is now closed. New entries below it are **cod
 | **Files changed** | `src/html.ts` *(new)*, `src/report.ts` *(new)*, `src/cli.ts`, `src/reconcile.ts`, `src/redact.ts`, `src/render.ts`, `src/transcript.ts`, `test/html.test.ts` *(new)*, `test/reconcile.test.ts`, `test/store.test.ts`, `README.md`, `PROJECT_TRACKER.md` |
 | **Author** | AI (Claude, Agent SDK) |
 
-**Summary.** Added `land ui` — a self-contained HTML evidence report (`ADR-026`–`ADR-028`) — then audited the whole codebase in parallel and fixed every real defect found. Still zero runtime dependencies. 35 tests.
+**Summary.** Added `land ui` — a self-contained HTML evidence report (`ADR-026`–`ADR-028`) — then audited the whole codebase in parallel and fixed every real defect found. Still zero runtime dependencies. 40 tests.
 
 **Reason.** `F-030` requires a shareable artifact: an evidence bundle is a court exhibit, and a reviewer who must install a tool to read it will not read it. The audit was the `Understand → Audit → Refine` half of the brief; four read-only agents covered transcript parsing, claim extraction, security, and reconciliation.
 
@@ -369,13 +373,15 @@ Documentation debt from the review is now closed. New entries below it are **cod
 
 **Three UI defects fixed by looking at it in a browser rather than reasoning about it.** (1) The tally counted branches by *worst* verdict, so a corpus with 84 verified claims rendered **"Verified 0"** — technically true, completely misleading, in the one place a reader looks for a summary; it now counts claims. (2) Branch names broke mid-path (`Action_classification/` / `HEAD`) instead of truncating. (3) The background grid cut visible lines through the masthead.
 
-**Six defects found by the audit.** `DEBT-018`–`DEBT-022`, plus the badge-count honesty bug. The two worth naming: repo grouping keyed on `basename(cwd)`, so `client/app` and `server/app` merged into one row and reported a single verdict for unrelated work; and the badge's `+N more` counted only same-verdict findings, so one contradiction beside seven unverifiable claims rendered *no suffix at all*. The real corpus now reads `(1 of 31 claims)` — both numbers stated, neither implied.
+**Ten defects found by the audit and the smoke test.** `DEBT-018`–`DEBT-026`, plus the badge-count honesty bug. The two worth naming: repo grouping keyed on `basename(cwd)`, so `client/app` and `server/app` merged into one row and reported a single verdict for unrelated work; and the badge's `+N more` counted only same-verdict findings, so one contradiction beside seven unverifiable claims rendered *no suffix at all*. The real corpus now reads `(1 of 31 claims)` — both numbers stated, neither implied. **Four of the ten were introduced or exposed by the earlier fixes in this same entry** — which is the argument for smoke-testing every surface after every change, not only the one that was edited.
 
 **Redaction widened to 12 modern platform credential families.** Every rule matches a *distinctive prefix*. Shape-plus-nearby-word rules (a 24-char token near the word "vercel") were written, tested, and rejected: they fire on git SHAs and base64 chunks, and a redactor that mangles ordinary output teaches users to ignore the marker — which costs more than the gap it closes. Providers without a distinctive prefix remain covered by the `SENSITIVE_KEY` assignment rule and the entropy sweep.
 
 **Impact.** Re-ingesting the real corpus produces 83 redactions — identical to the `LOG-0005` baseline — confirming the new rules added coverage without a single false positive on real data. Chain verifies at 2,336 events. `tsc --noEmit` clean. Gate A results unchanged: still 0 false accusations.
 
-**Behaviour change.** `land queue` labels now show a repo-relative path (`../Action_classification/HEAD`) rather than a bare directory name, because the bare name was ambiguous across repositories.
+**Behaviour change.** `land queue` labels are now qualified with the shortest repository suffix that stays unambiguous (`Action_classification/HEAD`) rather than a bare branch name, because `HEAD` and `main` recur across every repository on a machine.
+
+**Superseded within this entry.** The first labelling fix used `relative(cwd, …)` and was itself defective — see `DEBT-023`–`DEBT-026`, fixed in the same session: cwd-dependent labels, three surfaces recomputing grouping, `--json` reporting sessions under a `branches` key, and `--json` never setting a non-zero exit code.
 
 ---
 
