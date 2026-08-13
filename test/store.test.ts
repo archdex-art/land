@@ -114,6 +114,18 @@ test('redaction covers the credential families that matter', () => {
     ['AIzaSyD-1234567890abcdefghijklmnopqrstu', 'google-api-key'],
     ['postgres://user:hunter2@db.internal:5432/app', 'pg-url'],
     ['Authorization: Bearer abcdefghijklmnopqrstuvwxyz012345', 'bearer'],
+    // Modern platform tokens: agents hit these during deploys and migrations.
+    ['sbp_NOT_A_REAL_TOKEN_EXAMPLE_0000', 'supabase-key'],
+    ['glpat-xxxxxxxxxxxxxxxxxxxx', 'gitlab-token'],
+    ['SG.abcdefghij1234567890.klmnopqrst1234567890', 'sendgrid-key'],
+    ['SKdeadbeefdeadbeefdeadbeefdeadbeef', 'twilio-key'],
+    ['lin_api_0123456789abcdef0123456789abcdef', 'linear-key'],
+    [`dop_v1_${'a'.repeat(64)}`, 'digitalocean-token'],
+    [`shp${'at'}_${'deadbeef'.repeat(4)}`, 'shopify-token'],
+    ['figd_abcdefghij1234567890abcd', 'figma-token'],
+    [`gsk_${'a'.repeat(40)}`, 'groq-key'],
+    [`xai-${'z'.repeat(40)}`, 'xai-key'],
+    ['dp.pt.abcdefghij1234567890abcd', 'doppler-token'],
   ];
   for (const [secret, kind] of cases) {
     const { text, counts } = redact(`export VALUE=${secret}`);
@@ -129,6 +141,27 @@ test('redaction is idempotent and leaves ordinary output readable', () => {
   // A commit hash is high-entropy but not a credential; redacting it would make
   // real output unreadable for no security gain.
   assert.match(redact('commit=8f14e45fceea167a5a36dedd4bea2543').text, /8f14e45f/);
+});
+
+/*
+ * A redactor that mangles ordinary output is worse than one gap: users learn to
+ * ignore the marker, and then a real leak reads as noise. Every line below is
+ * real agent output that must survive untouched.
+ */
+test('ordinary high-entropy output is never redacted', () => {
+  const untouched = [
+    'git commit 3f2a1b8c9d4e5f6789012345678901234567890a',
+    'Co-Authored-By: Claude <noreply@anthropic.com>',
+    'PYTHON=/Library/Frameworks/Python.framework/Versions/3.14/bin/python3',
+    'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+    'Successfully built abc123def456',
+    '--- FAIL: TestParse (0.00s)',
+  ];
+  for (const line of untouched) {
+    const { text, counts } = redact(line);
+    assert.equal(text, line, `mangled ordinary output: ${line}`);
+    assert.equal(Object.keys(counts).length, 0, `false positive on: ${line}`);
+  }
 });
 
 test('truncation happens after redaction so no secret survives at the cut', () => {

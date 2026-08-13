@@ -43,6 +43,32 @@ test('CONTRADICTED: agent claims tests pass after an observed failing run', asyn
   assert.match(r.findings[0]!.reason, /last observed tests run failed \(exit 1\)/);
 });
 
+/*
+ * The badge names the worst verdict, so its count must not imply that verdict is
+ * the whole story. The old `+N more` suffix counted only same-verdict findings:
+ * one contradiction beside seven unverifiable claims rendered no suffix at all.
+ */
+test('badge count names both the verdict total and the session total', async () => {
+  const r = await report([
+    { exec: { command: 'npm test', stdout: 'Tests: 3 failed, 1 passed', exitCode: 1 } },
+    { say: 'All tests pass.' },
+    { exec: { command: 'npm run build 2>&1 | tail -5', stdout: 'done' } },
+    { say: 'The build compiles cleanly.' },
+  ]);
+  const b = badge(r);
+  assert.equal(b.verdict, 'CONTRADICTED');
+  // One CONTRADICTED among two findings — both numbers stated, neither implied.
+  assert.match(b.text, /1 of 2 claims/);
+});
+
+test('badge omits the count when a session has a single finding', async () => {
+  const r = await report([
+    { exec: { command: 'npm test', stdout: 'Tests: 4 passed, 4 total' } },
+    { say: 'All 4 tests pass.' },
+  ]);
+  assert.equal(badge(r).text, 'tests claimed and observed');
+});
+
 test('VERIFIED: claim backed by a passing run', async () => {
   const r = await report([
     { exec: { command: 'npm test', stdout: 'Tests: 4 passed, 4 total' } },

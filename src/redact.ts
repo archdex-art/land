@@ -44,6 +44,26 @@ const RULES: readonly Rule[] = [
   { kind: 'stripe-key', re: /\b((?:sk|rk)_(?:live|test)_[A-Za-z0-9]{20,})\b/g },
   { kind: 'npm-token', re: /\b(npm_[A-Za-z0-9]{36})\b/g },
   { kind: 'hf-token', re: /\b(hf_[A-Za-z0-9]{30,})\b/g },
+  /*
+   * Modern platform tokens. Every one below is matched by a *distinctive prefix*,
+   * never by shape-plus-nearby-word: a rule like `[A-Za-z0-9]{24}` near the word
+   * "vercel" fires on git SHAs and base64 chunks, and a redactor that mangles
+   * ordinary output teaches users to ignore the marker. Provider tokens without a
+   * distinctive prefix (Cloudflare, Vercel, Upstash) are already covered by the
+   * `SENSITIVE_KEY` assignment rule and the entropy sweep below.
+   */
+  { kind: 'supabase-key', re: /\b(sb[ps]_[A-Za-z0-9\-_]{20,})\b/g },
+  { kind: 'gitlab-token', re: /\b(gl(?:pat|rt|soat|ptt)-[A-Za-z0-9\-_]{20,})\b/g },
+  { kind: 'sendgrid-key', re: /\b(SG\.[A-Za-z0-9\-_]{16,}\.[A-Za-z0-9\-_]{16,})\b/g },
+  { kind: 'twilio-key', re: /\b(SK[a-f0-9]{32})\b/g },
+  { kind: 'linear-key', re: /\b(lin_api_[A-Za-z0-9]{32,})\b/g },
+  { kind: 'digitalocean-token', re: /\b(dop_v1_[a-f0-9]{64})\b/g },
+  { kind: 'shopify-token', re: /\b(shp(?:at|ss|ca|pa)_[a-f0-9]{32})\b/g },
+  { kind: 'figma-token', re: /\b(figd_[A-Za-z0-9\-_]{20,})\b/g },
+  { kind: 'groq-key', re: /\b(gsk_[A-Za-z0-9]{40,})\b/g },
+  { kind: 'openrouter-key', re: /\b(sk-or-v1-[a-f0-9]{40,})\b/g },
+  { kind: 'xai-key', re: /\b(xai-[A-Za-z0-9]{40,})\b/g },
+  { kind: 'doppler-token', re: /\b(dp\.(?:pt|st|sa|ct)\.[A-Za-z0-9\-_]{20,})\b/g },
   { kind: 'jwt', re: /\b(eyJ[A-Za-z0-9\-_]{10,}\.[A-Za-z0-9\-_]{10,}\.[A-Za-z0-9\-_]{10,})\b/g },
   { kind: 'private-key', re: /-----BEGIN[ A-Z]*PRIVATE KEY-----[\s\S]*?-----END[ A-Z]*PRIVATE KEY-----/g },
   { kind: 'bearer', re: /\b(?:Bearer|Authorization:\s*Bearer)\s+([A-Za-z0-9\-._~+/]{16,}=*)/gi, group: 1 },

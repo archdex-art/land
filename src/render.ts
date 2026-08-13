@@ -12,6 +12,9 @@ import { badge, type Finding, type SessionReport, type Verdict } from './reconci
 
 const useColor = process.stdout.isTTY === true && process.env['NO_COLOR'] === undefined;
 
+/** Strip ANSI escape sequences. Git can emit coloured branch names via `color.branch`. */
+const stripAnsi = (s: string) => s.replace(/\u001B\[[0-9;]*[a-zA-Z]/g, '');
+
 const paint = (code: string, text: string) => (useColor ? `\u001B[${code}m${text}\u001B[0m` : text);
 
 const dim = (s: string) => paint('2', s);
@@ -94,8 +97,14 @@ export function renderQueue(reports: SessionReport[]): string {
 
   const byBranch = new Map<string, SessionReport[]>();
   for (const report of reports) {
-    const branch = report.session.gitBranch ?? '(no branch)';
-    const key = qualify ? `${basename(report.session.cwd ?? 'unknown')}/${branch}` : branch;
+    const raw = report.session.gitBranch ?? '(no branch)';
+    // Strip ANSI: git can emit coloured branch names via `color.branch`.
+    const branch = stripAnsi(raw);
+    // Use the full cwd as the repo key, not just `basename`, which collides
+    // when two repos share a trailing directory name (e.g. `client/app` vs `server/app`).
+    const key = qualify
+      ? `${relative(process.cwd(), report.session.cwd ?? 'unknown') || basename(report.session.cwd ?? 'unknown')}/${branch}`
+      : branch;
     const bucket = byBranch.get(key);
     if (bucket === undefined) byBranch.set(key, [report]);
     else bucket.push(report);
@@ -113,14 +122,17 @@ export function renderQueue(reports: SessionReport[]): string {
 
   rows.sort((a, b) => RISK_ORDER[a.b.verdict] - RISK_ORDER[b.b.verdict] || b.execs - a.execs);
 
-  const width = Math.max(6, ...rows.map((r) => r.branch.length));
+  // Cap branch labels: an unbounded name pushes verdict text off-screen.
+  const maxBranch = Math.min(60, (process.stdout.columns ?? 120) - TAG_WIDTH - 40);
+  const width = Math.max(6, ...rows.map((r) => Math.min(r.branch.length, maxBranch)));
   const out: string[] = [];
   for (const row of rows) {
-    // Pad the plain label, then colour it: padding a string that already holds
-    // escape codes counts them as visible width and breaks the column.
     const style = VERDICT_STYLE[row.b.verdict];
     const tag = paint(style.code, `${style.mark} ${row.b.verdict}`.padEnd(TAG_WIDTH));
-    out.push(`${tag} ${bold(row.branch.padEnd(width))}  ${row.b.text}`);
+    // Truncate, then pad: truncation removes characters that padding would
+    // compensate for; reversing the order under-pads every truncated label.
+    const label = row.branch.length > maxBranch ? row.branch.slice(0, maxBranch - 1) + '…' : row.branch;
+    out.push(`${tag} ${bold(label.padEnd(width))}  ${row.b.text}`);
     out.push(
       dim(
         `${' '.repeat(TAG_WIDTH + 1 + width + 2)}${plural(row.sessions, 'session')}` +

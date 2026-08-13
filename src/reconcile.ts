@@ -229,11 +229,18 @@ export function reconcile(session: Session): SessionReport {
 /** Collapse a session's findings to the one badge a reviewer reads first. */
 export function badge(report: SessionReport): { verdict: Verdict; text: string } {
   const order: Verdict[] = ['CONTRADICTED', 'UNSUPPORTED', 'UNKNOWN', 'VERIFIED'];
+  const total = report.findings.length;
   for (const verdict of order) {
     const hit = report.findings.filter((f) => f.verdict === verdict);
     const first = hit[0];
     if (first === undefined) continue;
-    const extra = hit.length > 1 ? ` (+${hit.length - 1} more)` : '';
+    /*
+     * `N of M claims`, not `+N more`. The old suffix counted only findings of
+     * this same verdict, so a session with one CONTRADICTED and seven UNKNOWN
+     * rendered no suffix at all — a reader reasonably infers one finding total.
+     * Naming both numbers cannot mislead in either direction.
+     */
+    const extra = total > 1 ? ` (${hit.length} of ${total} claims)` : '';
     switch (verdict) {
       case 'CONTRADICTED':
         return { verdict, text: `${LABEL[first.claim.activity]} claimed passing, observed failing${extra}` };
@@ -280,17 +287,23 @@ export function groupBranches(reports: SessionReport[]): BranchRow[] {
   const repos = new Set(reports.map((r) => r.session.cwd ?? ''));
   const qualify = repos.size > 1;
 
-  const groups = new Map<string, SessionReport[]>();
+  const groups = new Map<string, { label: string; reports: SessionReport[] }>();
   for (const report of reports) {
     const branch = report.session.gitBranch ?? '(no branch)';
-    const key = qualify ? `${(report.session.cwd ?? 'unknown').split('/').pop()}/${branch}` : branch;
-    const bucket = groups.get(key);
-    if (bucket === undefined) groups.set(key, [report]);
-    else bucket.push(report);
+    // Use the full cwd, not just the trailing directory name, to avoid merging
+    // unrelated repos that share a basename (e.g. `client/app` vs `server/app`).
+    const key = qualify ? `${report.session.cwd ?? 'unknown'}/${branch}` : branch;
+    const existing = groups.get(key);
+    if (existing === undefined) {
+      const label = qualify ? `${(report.session.cwd ?? 'unknown').split('/').pop()}/${branch}` : branch;
+      groups.set(key, { label, reports: [report] });
+    } else {
+      existing.reports.push(report);
+    }
   }
 
   const rows: BranchRow[] = [];
-  for (const [label, group] of groups) {
+  for (const [, { label, reports: group }] of groups) {
     const worst = group
       .map((r) => badge(r))
       .sort((a, b) => RISK_ORDER[a.verdict] - RISK_ORDER[b.verdict])[0]!;

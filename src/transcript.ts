@@ -190,9 +190,18 @@ export async function readTranscript(file: string): Promise<Session> {
   /** tool_use id -> the invocation, so a later tool_result can be joined to it. */
   const pending = new Map<string, ToolUse>();
 
-  const stream = createInterface({ input: createReadStream(file, 'utf8'), crlfDelay: Infinity });
+  // Stream creation can throw (ENOENT if file disappeared, EACCES). The for-await
+  // loop can throw on mid-read I/O errors. Both are I/O failures on external data
+  // that was valid at discovery time; crashing the process is the wrong response.
+  let stream;
+  try {
+    stream = createInterface({ input: createReadStream(file, 'utf8'), crlfDelay: Infinity });
+  } catch {
+    return session;
+  }
   let seq = 0;
 
+  try {
   for await (const raw of stream) {
     seq += 1;
     const line = raw.trim();
@@ -302,6 +311,10 @@ export async function readTranscript(file: string): Promise<Session> {
           break;
       }
     }
+  }
+  } catch {
+    // Mid-stream I/O error (file truncated, filesystem error). Return whatever
+    // we parsed so far — partial evidence is more useful than a crash.
   }
 
   session.models = [...models];
