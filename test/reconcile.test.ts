@@ -222,3 +222,23 @@ test('ANSI escapes in a branch name never reach a label', () => {
   assert.ok(row !== undefined);
   assert.doesNotMatch(row.label, /\u001B/);
 });
+
+/*
+ * Three surfaces render these rows: the terminal, the HTML report, and `--json`.
+ * `--json` once emitted one entry per *session* under a key named `branches`, so
+ * `land queue` reported 11 rows and `land queue --json` reported 18 for identical
+ * input. Any surface that recomputes grouping will drift again, so the invariant
+ * is asserted directly: one row per (repo, branch) pair, whatever the format.
+ */
+test('grouping collapses sessions to one row per repo and branch', () => {
+  const rows = groupBranches([
+    stub('/work/one', 'main'),
+    stub('/work/one', 'main'),
+    stub('/work/one', 'feature'),
+    stub('/work/two', 'main'),
+  ]);
+  assert.equal(rows.length, 3, 'two sessions on one/main are one row');
+  const onMain = rows.find((r) => r.label === 'one/main');
+  assert.ok(onMain !== undefined);
+  assert.equal(onMain.reports.length, 2, 'both sessions stay reachable from the row');
+});

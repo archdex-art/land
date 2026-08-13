@@ -45,8 +45,10 @@ land ingest                       # append sessions to the hash-chained evidence
 land verify                       # recompute the chain, report the first divergence
 ```
 
-Every command takes `--json`. Exit code is `1` when something needs reading and
-`2` when the evidence chain is broken, so `land queue --json` works as a CI gate.
+Every command takes `--json`, and every surface reports the same rows — one per
+(repo, branch) pair. Exit code is `1` when something needs reading and `2` when
+the evidence chain is broken, independent of output format, so `land queue --json`
+works as a CI gate.
 
 ## Verdicts
 
@@ -143,7 +145,7 @@ documented upstream:
 node --test "test/*.test.ts"
 ```
 
-32 tests. The reconciliation tests are the specification; the html.ts tests
+40 tests. The reconciliation tests are the specification; the html.ts tests
 encode the XSS defence contract.
 
 ## License

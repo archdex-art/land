@@ -18,7 +18,7 @@ import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { allTranscripts, transcriptsFor } from './discover.ts';
 import { readTranscript, type Session } from './transcript.ts';
-import { badge, reconcile, type SessionReport } from './reconcile.ts';
+import { badge, groupBranches, reconcile, type SessionReport } from './reconcile.ts';
 import { renderQueue, renderSession } from './render.ts';
 import { renderReport } from './report.ts';
 import { EvidenceStore } from './store.ts';
@@ -149,34 +149,47 @@ function emptyMessage(options: Options): string {
 
 async function cmdQueue(options: Options): Promise<number> {
   const reports = await load(options);
+  // Every surface reports the same rows. `--json` previously emitted one entry per
+  // *session* under a key named `branches`, so `land queue` and `land queue --json`
+  // disagreed on the count (18 vs 11) for identical input.
+  const rows = groupBranches(reports);
+  const attention = rows.filter((r) => r.needsAttention).length;
+
   if (options.json) {
     process.stdout.write(
       `${JSON.stringify(
         {
           version: OUTPUT_VERSION,
           repo: options.repo,
-          branches: reports.map((r) => ({
-            session: r.session.id,
-            branch: r.session.gitBranch,
-            badge: badge(r),
-            risk: r.risk,
-            commands: r.session.execs.length,
-            edits: r.session.edits.length,
-            tokens: r.session.usage.inputTokens + r.session.usage.outputTokens,
+          sessions: reports.length,
+          needsAttention: attention,
+          branches: rows.map((r) => ({
+            label: r.label,
+            branch: r.branch,
+            cwd: r.cwd,
+            verdict: r.verdict,
+            summary: r.summary,
+            needsAttention: r.needsAttention,
+            sessions: r.reports.map((s) => s.session.id),
+            commands: r.execs,
+            edits: r.edits,
+            tokens: r.tokens,
           })),
         },
         null,
         2,
       )}\n`,
     );
-    return 0;
+    // The exit code is the CI gate, and it must not depend on the output format.
+    return attention > 0 ? 1 : 0;
   }
+
   if (reports.length === 0) {
     process.stdout.write(`${emptyMessage(options)}\n`);
     return 0;
   }
   process.stdout.write(`${renderQueue(reports)}\n`);
-  return reports.some((r) => badge(r).verdict === 'CONTRADICTED' || badge(r).verdict === 'UNSUPPORTED') ? 1 : 0;
+  return attention > 0 ? 1 : 0;
 }
 
 async function cmdEvidence(options: Options): Promise<number> {
