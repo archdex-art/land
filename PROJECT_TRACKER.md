@@ -6,10 +6,10 @@
 | | |
 |---|---|
 | **Project** | `land` (renamed from ArchTerminal — `ADR-016` accepted) |
-| **Tracker version** | 1.1.0 |
-| **Last updated** | 2026-08-13T00:00:00Z |
-| **Phase** | **M1 — Evidence** (shipped; Gate A evidence recorded below) |
-| **Lines of product code** | **1,946** src · **406** test (23 tests) |
+| **Tracker version** | 1.2.0 |
+| **Last updated** | 2026-08-13T02:45:00Z |
+| **Phase** | **M1 — Evidence** (shipped + audited; HTML report added) |
+| **Lines of product code** | **2,896** src · **555** test (35 tests) |
 | **Version control** | ✅ git, `DEBT-007` closed |
 | **Documents** | `README.md`, `ArchTerminal-Research.md`, `ArchTerminal-Review.md`, `PROJECT_TRACKER.md` |
 
@@ -127,9 +127,12 @@ Gate A: *the badge fires correctly across 10 real sessions, with zero false accu
 | True positive | An agent wrote *"Lint clean, 27 tests pass"* while `ruff` printed `Found 1 error.` The test half was true; the lint half was not. |
 | Evidence store | 2,336 events, hash chain verifies; tamper detected at the mutated row with exit 2 |
 | Secrets redacted at write time | 83, including a live Upstash Redis REST token |
-| Tests | 23, all passing; `tsc --noEmit` clean |
+| Tests | **35**, all passing; `tsc --noEmit` clean |
+| Surfaces | terminal (`queue`, `evidence`) + **self-contained HTML report** (`ui`), both from one `groupBranches` code path |
 
 **Two false accusations were found and fixed during the run**, both from treating the word "check" as test vocabulary (*"the no-duplicate-names check already passed"*, *"its gradient check passing < 1e-5"*). Both are recorded as regression comments in `src/claims.ts`. A third defect was worse than a false accusation and is recorded in `src/reconcile.ts`: a user-**denied** `npm test` was being admitted as evidence *supporting* a claim that tests passed.
+
+**A second defect round came from auditing the shipped code** (`DEBT-018`–`DEBT-022`, `LOG-0006`). Two mattered: repo grouping keyed on `basename(cwd)` merged unrelated repositories that share a trailing directory name, and the badge's `+N more` counted only same-verdict findings — so one contradiction beside seven unverifiable claims rendered no suffix at all. Neither was visible from reading the code; both surfaced from running it against the real corpus and reading the output as a user would.
 
 ---
 
@@ -164,6 +167,8 @@ Gate A: *the badge fires correctly across 10 real sessions, with zero false accu
 | `F-016` | JSON output on every command | ✅ Done | AI | P1 | `ADR-018` |
 | `F-016b` | Unix socket API | ⬜ Planned | Unassigned | P2 | `F-016` |
 | `F-017` | Risk-ranked queue surface (`land queue`) | ✅ Done | AI | P1 | `F-013` |
+| `F-017b` | **Self-contained HTML report** (`land ui`) — one file, zero network requests | ✅ Done | AI | P1 | `F-017`,`ADR-026` |
+| `F-017c` | **HTML escaping as a security control** (`src/html.ts`, tested) | ✅ Done | AI | P1 | `ADR-027` |
 | `F-018` | PTY capture fallback | ⬜ Planned | Unassigned | P2 | `F-010` |
 | `F-019` | Adapters for non-Claude agents (Codex, Cursor, opencode) | ⬜ Planned | Unassigned | P2 | `F-010`,`LIM-005` |
 
@@ -181,7 +186,7 @@ Gate A: *the badge fires correctly across 10 real sessions, with zero false accu
 | `F-027` | Branch discovery (incl. stale/rebased/abandoned) | ⬜ Planned | Unassigned | P2 | — |
 | `F-028` | `land` — execute merge order with verification between steps | ⬜ Planned | Unassigned | P2 | `F-025` |
 | `F-029` | in-toto / SLSA attestation export | ⬜ Planned | Unassigned | P2 | `F-012`,`ADR-011` |
-| `F-030` | Shareable evidence bundle URL | ⬜ Planned | Unassigned | P2 | `F-029`,`F-011` |
+| `F-030` | Shareable evidence bundle — **artifact shipped as `land ui`** (`F-017b`); the *URL* half still needs `F-029` | 🟡 Partial | AI | P2 | `F-029`,`F-011` |
 | `F-031` | Publish benchmark + our score *including failures* | ⬜ Planned | Unassigned | P2 | `F-020`,`F-024` |
 | `F-032` | GitHub Action / CI mode | ⬜ Planned | Unassigned | P2 | `F-024` |
 | `F-033` | **Merge-queue integration + CI-minutes-saved metric** 💰 | ⬜ Planned | Unassigned | P2 | `F-032` |
@@ -212,8 +217,9 @@ Gate A: *the badge fires correctly across 10 real sessions, with zero false accu
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│  Surfaces   CLI (queue · evidence · ingest · verify) ✅            │
-│             JSON on every command ✅ · socket API ⬜ · CI action ⬜  │
+│  Surfaces   CLI (queue · evidence · ui · ingest · verify)     ✅  │
+│             self-contained HTML report ✅ · JSON everywhere    ✅  │
+│             socket API ⬜ · CI action ⬜ · shareable URL       ⬜  │
 ├──────────────────────────────────────────────────────────────────┤
 │  Merge Planner    risk model · order solver · policy gates    ⬜  │
 ├──────────────────────────────────────────────────────────────────┤
@@ -289,6 +295,11 @@ Documentation debt from the review is now closed. New entries below it are **cod
 | `DEBT-015` | **No `.land/` store is written by `queue`/`evidence`** — they parse live each time, so there is no cross-machine or historical view | 🟡 | ⬜ Open | `src/cli.ts` | Read from the store when present, fall back to live parse |
 | `DEBT-016` | **`opaqueExecutors` triggers session-wide abstention**, not per-activity. One MCP eval tool suppresses accusations about lint as well as tests | 🟡 | ⬜ Open | `src/reconcile.ts` | Acceptable while precision is the binding constraint; narrow when recall starts mattering |
 | `DEBT-017` | **Single-agent format only.** Codex, Cursor (SQLite `state.vscdb`), opencode (SQLite), Aider (markdown) are unsupported, so `LIM-005` bites immediately outside Claude Code | 🟠 | ⬜ Open | `src/transcript.ts` | `F-019`; the `Session` type is already format-agnostic |
+| `DEBT-018` | **Branch names were rendered unsanitised.** Git emits coloured names via `color.branch`; an embedded ANSI reset terminated styling early and the escape bytes counted toward padding width | 🟡 | ✅ **Fixed 2026-08-13** | `src/render.ts` | `stripAnsi` before grouping; truncate to terminal width |
+| `DEBT-019` | **Repo grouping keyed on `basename(cwd)`.** Two repos sharing a trailing directory name (`client/app`, `server/app`) merged into one row and reported a single verdict for unrelated work | 🟠 | ✅ **Fixed 2026-08-13** | `src/reconcile.ts`, `src/render.ts` | Key on full `cwd`; keep `basename` for display only |
+| `DEBT-020` | **Transcript reads had no I/O error boundary.** A transcript deleted between discovery and read raised an unhandled rejection and killed the process mid-run | 🟠 | ✅ **Fixed 2026-08-13** | `src/transcript.ts` | `try`/`catch` around stream creation and the read loop; return partial evidence |
+| `DEBT-021` | **Badge `+N more` counted only same-verdict findings.** One contradiction beside seven unverifiable claims rendered no suffix at all, so a reader infers one finding total | 🟠 | ✅ **Fixed 2026-08-13** | `src/reconcile.ts` | `N of M claims` — both numbers stated, neither implied |
+| `DEBT-022` | **Redaction missed 12 modern platform credential families** (Supabase, GitLab, SendGrid, Twilio, Linear, DigitalOcean, Shopify, Figma, Groq, OpenRouter, xAI, Doppler) | 🟠 | ✅ **Fixed 2026-08-13** | `src/redact.ts` | Distinctive-prefix rules only; shape-plus-nearby-word rules rejected as false-positive machines |
 
 ---
 
@@ -338,6 +349,33 @@ Documentation debt from the review is now closed. New entries below it are **cod
 ## 9. Change Log
 
 > **Append-only.** Newest first. Never edit or delete an existing entry — supersede it with a new one.
+
+---
+
+### `LOG-0006` — 2026-08-13T02:45:00Z
+
+| | |
+|---|---|
+| **Version** | tracker `1.2.0` · `land` `0.1.0` |
+| **Category** | Feature / Security / Fix |
+| **Files changed** | `src/html.ts` *(new)*, `src/report.ts` *(new)*, `src/cli.ts`, `src/reconcile.ts`, `src/redact.ts`, `src/render.ts`, `src/transcript.ts`, `test/html.test.ts` *(new)*, `test/reconcile.test.ts`, `test/store.test.ts`, `README.md`, `PROJECT_TRACKER.md` |
+| **Author** | AI (Claude, Agent SDK) |
+
+**Summary.** Added `land ui` — a self-contained HTML evidence report (`ADR-026`–`ADR-028`) — then audited the whole codebase in parallel and fixed every real defect found. Still zero runtime dependencies. 35 tests.
+
+**Reason.** `F-030` requires a shareable artifact: an evidence bundle is a court exhibit, and a reviewer who must install a tool to read it will not read it. The audit was the `Understand → Audit → Refine` half of the brief; four read-only agents covered transcript parsing, claim extraction, security, and reconciliation.
+
+**The report is a security boundary, not a formatting concern.** It embeds agent shell commands and their captured output and is then *sent to another human*. Unescaped output is stored XSS with a delivery mechanism. So `src/html.ts` is a tagged template that escapes every interpolation unless explicitly marked `trusted()`, `jsonScriptPayload()` neutralises the `</script>` break-out that JSON quoting does not cover, and nothing in the codebase concatenates markup by hand. CSP is `default-src 'none'`; the emitted document makes zero network requests — verified on the real corpus, where the only URLs present are inside displayed command text, correctly escaped.
+
+**Three UI defects fixed by looking at it in a browser rather than reasoning about it.** (1) The tally counted branches by *worst* verdict, so a corpus with 84 verified claims rendered **"Verified 0"** — technically true, completely misleading, in the one place a reader looks for a summary; it now counts claims. (2) Branch names broke mid-path (`Action_classification/` / `HEAD`) instead of truncating. (3) The background grid cut visible lines through the masthead.
+
+**Six defects found by the audit.** `DEBT-018`–`DEBT-022`, plus the badge-count honesty bug. The two worth naming: repo grouping keyed on `basename(cwd)`, so `client/app` and `server/app` merged into one row and reported a single verdict for unrelated work; and the badge's `+N more` counted only same-verdict findings, so one contradiction beside seven unverifiable claims rendered *no suffix at all*. The real corpus now reads `(1 of 31 claims)` — both numbers stated, neither implied.
+
+**Redaction widened to 12 modern platform credential families.** Every rule matches a *distinctive prefix*. Shape-plus-nearby-word rules (a 24-char token near the word "vercel") were written, tested, and rejected: they fire on git SHAs and base64 chunks, and a redactor that mangles ordinary output teaches users to ignore the marker — which costs more than the gap it closes. Providers without a distinctive prefix remain covered by the `SENSITIVE_KEY` assignment rule and the entropy sweep.
+
+**Impact.** Re-ingesting the real corpus produces 83 redactions — identical to the `LOG-0005` baseline — confirming the new rules added coverage without a single false positive on real data. Chain verifies at 2,336 events. `tsc --noEmit` clean. Gate A results unchanged: still 0 false accusations.
+
+**Behaviour change.** `land queue` labels now show a repo-relative path (`../Action_classification/HEAD`) rather than a bare directory name, because the bare name was ambiguous across repositories.
 
 ---
 
