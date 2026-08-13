@@ -12,11 +12,15 @@
  */
 
 import { parseArgs } from 'node:util';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { spawn } from 'node:child_process';
 import { allTranscripts, transcriptsFor } from './discover.ts';
 import { readTranscript, type Session } from './transcript.ts';
 import { badge, reconcile, type SessionReport } from './reconcile.ts';
 import { renderQueue, renderSession } from './render.ts';
+import { renderReport } from './report.ts';
 import { EvidenceStore } from './store.ts';
 
 const OUTPUT_VERSION = 1;
@@ -30,6 +34,10 @@ usage
   land evidence [--repo <path>] [--branch <name>] [--session <id>] [--json]
       Per-session detail: every claim, its verdict, and the command behind it.
 
+  land ui       [--repo <path>] [--branch <name>] [--out <file>] [--no-open]
+      Write a self-contained HTML report and open it. One file, no server,
+      no network requests — send it to a reviewer as proof.
+
   land ingest   [--repo <path>] [--all] [--store <path>] [--json]
       Append sessions to the hash-chained evidence store.
 
@@ -42,6 +50,8 @@ options
   --session <id>    restrict to one session id (prefix match)
   --store <path>    evidence database (default: <repo>/.land/evidence.db)
   --all             every transcript on this machine, not just this repo
+  --out <file>      where to write the HTML report (default: a temp file)
+  --no-open         write the report but do not launch a browser
   --json            machine-readable output
   --limit <n>       max sessions to read (default 200)
 
@@ -60,6 +70,8 @@ interface Options {
   all: boolean;
   json: boolean;
   limit: number;
+  out: string | undefined;
+  open: boolean;
 }
 
 function parse(argv: string[]): { command: string; options: Options } {
@@ -73,6 +85,10 @@ function parse(argv: string[]): { command: string; options: Options } {
       store: { type: 'string' },
       all: { type: 'boolean', default: false },
       json: { type: 'boolean', default: false },
+      out: { type: 'string' },
+      // Declared literally: this Node build does not honour `allowNegative`
+      // for `--no-<name>`, and a flag that silently fails is worse than a plain one.
+      'no-open': { type: 'boolean', default: false },
       limit: { type: 'string' },
       help: { type: 'boolean', short: 'h', default: false },
     },
@@ -89,6 +105,8 @@ function parse(argv: string[]): { command: string; options: Options } {
       all: values.all === true,
       json: values.json === true,
       limit: values.limit === undefined ? 200 : Number(values.limit),
+      out: values.out === undefined ? undefined : resolve(values.out),
+      open: values['no-open'] !== true,
     },
   };
 }
@@ -239,6 +257,53 @@ async function cmdIngest(options: Options): Promise<number> {
   }
 }
 
+/**
+ * Open a file with the platform handler. Deliberately not a dependency: the
+ * whole command is three platform strings, and `open`/`xdg-open`/`start` is the
+ * entirety of what any `open` package does.
+ */
+function launch(path: string): void {
+  const [cmd, args] =
+    process.platform === 'darwin'
+      ? ['open', [path]]
+      : process.platform === 'win32'
+        ? ['cmd', ['/c', 'start', '', path]]
+        : ['xdg-open', [path]];
+  const child = spawn(cmd as string, args as string[], { stdio: 'ignore', detached: true });
+  child.on('error', () => {
+    process.stderr.write(`land: could not open a browser; the report is at ${path}\n`);
+  });
+  child.unref();
+}
+
+async function cmdUi(options: Options): Promise<number> {
+  const reports = await load(options);
+  const out = options.out ?? join(tmpdir(), `land-${Date.now()}.html`);
+  const store = existsSync(options.store) ? new EvidenceStore(options.store) : undefined;
+  const meta = {
+    repo: options.all ? 'all repositories on this machine' : options.repo,
+    generatedAt: new Date().toISOString().replace('T', ' ').slice(0, 19) + 'Z',
+    chainHead: store?.headHash(),
+    version: OUTPUT_VERSION === 1 ? '0.1.0' : String(OUTPUT_VERSION),
+  };
+  store?.close();
+
+  mkdirSync(dirname(out), { recursive: true });
+  writeFileSync(out, renderReport(reports, meta), 'utf8');
+
+  const attention = reports.filter((r) => {
+    const v = badge(r).verdict;
+    return v === 'CONTRADICTED' || v === 'UNSUPPORTED';
+  }).length;
+
+  process.stdout.write(
+    `report: ${out}\n${reports.length} session${reports.length === 1 ? '' : 's'}` +
+      `${attention === 0 ? ', nothing needs attention' : `, ${attention} needing attention`}\n`,
+  );
+  if (options.open) launch(out);
+  return attention > 0 ? 1 : 0;
+}
+
 function cmdVerify(options: Options): number {
   const store = new EvidenceStore(options.store);
   try {
@@ -259,28 +324,40 @@ function cmdVerify(options: Options): number {
   }
 }
 
-const { command, options } = parse(process.argv.slice(2));
-let code = 0;
-switch (command) {
-  case 'queue':
-    code = await cmdQueue(options);
-    break;
-  case 'evidence':
-    code = await cmdEvidence(options);
-    break;
-  case 'ingest':
-    code = await cmdIngest(options);
-    break;
-  case 'verify':
-    code = cmdVerify(options);
-    break;
-  case 'help':
-    process.stdout.write(USAGE);
-    break;
-  default:
-    process.stderr.write(`land: unknown command '${command}'\n\n${USAGE}`);
-    code = 64;
+async function main(): Promise<number> {
+  // A mistyped flag is a user error, not a crash: `parseArgs` throws, and an
+  // unhandled throw prints a Node stack trace at someone who wanted `--help`.
+  let parsed: { command: string; options: Options };
+  try {
+    parsed = parse(process.argv.slice(2));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message.split('. To specify')[0] : String(error);
+    process.stderr.write(`land: ${detail}\n\n${USAGE}`);
+    return 64;
+  }
+
+  const { command, options } = parsed;
+  switch (command) {
+    case 'queue':
+      return cmdQueue(options);
+    case 'evidence':
+      return cmdEvidence(options);
+    case 'ui':
+    case 'report':
+      return cmdUi(options);
+    case 'ingest':
+      return cmdIngest(options);
+    case 'verify':
+      return cmdVerify(options);
+    case 'help':
+      process.stdout.write(USAGE);
+      return 0;
+    default:
+      process.stderr.write(`land: unknown command '${command}'\n\n${USAGE}`);
+      return 64;
+  }
 }
+
 // `process.exit` discards buffered writes when stdout is a pipe, which silently
 // truncates `--json` output for any consumer. Set the code and let Node drain.
-process.exitCode = code;
+process.exitCode = await main();

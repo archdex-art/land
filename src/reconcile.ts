@@ -249,3 +249,65 @@ export function badge(report: SessionReport): { verdict: Verdict; text: string }
   if (ran.length > 0) return { verdict: 'VERIFIED', text: 'tests observed, none claimed' };
   return { verdict: 'UNKNOWN', text: 'no execution claims made' };
 }
+
+/** Ranking used by every surface. Lower sorts first. */
+export const RISK_ORDER: Record<Verdict, number> = { CONTRADICTED: 0, UNSUPPORTED: 1, UNKNOWN: 2, VERIFIED: 3 };
+
+export interface BranchRow {
+  /** Display label; qualified with the repository when the set spans several. */
+  label: string;
+  branch: string;
+  cwd: string | undefined;
+  reports: SessionReport[];
+  verdict: Verdict;
+  summary: string;
+  execs: number;
+  edits: number;
+  tokens: number;
+  /** True when this row is why the user opened the tool. */
+  needsAttention: boolean;
+}
+
+/**
+ * Collapse sessions into the branch rows both the terminal and the HTML report
+ * render. Shared deliberately: two surfaces computing "which branch is worst"
+ * independently is a bug waiting to be reported as a contradiction between them.
+ */
+export function groupBranches(reports: SessionReport[]): BranchRow[] {
+  // A branch name is only unique within a repository. `HEAD` and `main` recur
+  // across every repo on a machine, so grouping on the name alone merges
+  // unrelated work into one row.
+  const repos = new Set(reports.map((r) => r.session.cwd ?? ''));
+  const qualify = repos.size > 1;
+
+  const groups = new Map<string, SessionReport[]>();
+  for (const report of reports) {
+    const branch = report.session.gitBranch ?? '(no branch)';
+    const key = qualify ? `${(report.session.cwd ?? 'unknown').split('/').pop()}/${branch}` : branch;
+    const bucket = groups.get(key);
+    if (bucket === undefined) groups.set(key, [report]);
+    else bucket.push(report);
+  }
+
+  const rows: BranchRow[] = [];
+  for (const [label, group] of groups) {
+    const worst = group
+      .map((r) => badge(r))
+      .sort((a, b) => RISK_ORDER[a.verdict] - RISK_ORDER[b.verdict])[0]!;
+    const first = group[0]!;
+    rows.push({
+      label,
+      branch: first.session.gitBranch ?? '(no branch)',
+      cwd: first.session.cwd,
+      reports: group,
+      verdict: worst.verdict,
+      summary: worst.text,
+      execs: group.reduce((n, r) => n + r.session.execs.length, 0),
+      edits: group.reduce((n, r) => n + r.session.edits.length, 0),
+      tokens: group.reduce((n, r) => n + r.session.usage.inputTokens + r.session.usage.outputTokens, 0),
+      needsAttention: worst.verdict === 'CONTRADICTED' || worst.verdict === 'UNSUPPORTED',
+    });
+  }
+
+  return rows.sort((a, b) => RISK_ORDER[a.verdict] - RISK_ORDER[b.verdict] || b.execs - a.execs);
+}
