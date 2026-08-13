@@ -38,10 +38,11 @@ node src/cli.ts queue --repo ~/dev/myrepo
 ## Use
 
 ```sh
-land queue                  # risk-ranked view of every agent branch. Start here.
+land queue                        # risk-ranked view of every agent branch
 land evidence --branch fix/auth   # every claim, its verdict, the command behind it
-land ingest                 # append sessions to the hash-chained evidence store
-land verify                 # recompute the chain, report the first divergence
+land ui                           # self-contained HTML report — open or share
+land ingest                       # append sessions to the hash-chained evidence store
+land verify                       # recompute the chain, report the first divergence
 ```
 
 Every command takes `--json`. Exit code is `1` when something needs reading and
@@ -65,6 +66,19 @@ Measured on the 18 real sessions in this repository's development corpus: 84
 `VERIFIED`, 7 `UNKNOWN`, 1 `CONTRADICTED` (a true positive), **0 false
 accusations**. The two false positives found during development are documented as
 regression comments in `src/claims.ts` — they were both the word "check".
+
+## HTML report
+
+`land ui` generates a single self-contained HTML file — no server, no network
+requests, no external dependencies. CSP is `default-src 'none'`. Send it to a
+reviewer, attach it to a PR, archive it for audits. It includes filtering,
+keyboard navigation (`/` to search), a "needs attention" toggle, and works in
+both light and dark mode.
+
+```sh
+land ui --out evidence.html --no-open   # write without launching a browser
+land ui --all                           # every session on this machine
+```
 
 ## What it does not do
 
@@ -103,6 +117,8 @@ src/reconcile.ts    claimed vs observed → verdict, with abstention
 src/redact.ts       write-time secret redaction
 src/store.ts        hash-chained SQLite evidence store
 src/discover.ts     locate transcripts for a repository
+src/html.ts         tagged-template escaping (security boundary — XSS defence)
+src/report.ts       self-contained HTML report generator
 src/render.ts       terminal output
 src/cli.ts          commands, JSON contract
 ```
@@ -127,8 +143,8 @@ documented upstream:
 node --test "test/*.test.ts"
 ```
 
-23 tests. The reconciliation tests are the specification: each encodes one
-situation in which the accusation must fire, or one in which it must not.
+32 tests. The reconciliation tests are the specification; the html.ts tests
+encode the XSS defence contract.
 
 ## License
 
