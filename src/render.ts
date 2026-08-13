@@ -7,13 +7,10 @@
  * and the command that justifies it.
  */
 
-import { basename, relative } from 'node:path';
-import { badge, type Finding, type SessionReport, type Verdict } from './reconcile.ts';
+import { relative } from 'node:path';
+import { badge, groupBranches, type Finding, type SessionReport, type Verdict } from './reconcile.ts';
 
 const useColor = process.stdout.isTTY === true && process.env['NO_COLOR'] === undefined;
-
-/** Strip ANSI escape sequences. Git can emit coloured branch names via `color.branch`. */
-const stripAnsi = (s: string) => s.replace(/\u001B\[[0-9;]*[a-zA-Z]/g, '');
 
 const paint = (code: string, text: string) => (useColor ? `\u001B[${code}m${text}\u001B[0m` : text);
 
@@ -89,65 +86,37 @@ const RISK_ORDER: Record<Verdict, number> = { CONTRADICTED: 0, UNSUPPORTED: 1, U
  * decisions, not a report.
  */
 export function renderQueue(reports: SessionReport[]): string {
-  // A branch name is only unique within a repository. `HEAD` and `main` recur
-  // across every repo on a machine, so grouping on the name alone merged
-  // unrelated work into one row under `--all`.
-  const repos = new Set(reports.map((r) => r.session.cwd ?? ''));
-  const qualify = repos.size > 1;
-
-  const byBranch = new Map<string, SessionReport[]>();
-  for (const report of reports) {
-    const raw = report.session.gitBranch ?? '(no branch)';
-    // Strip ANSI: git can emit coloured branch names via `color.branch`.
-    const branch = stripAnsi(raw);
-    // Use the full cwd as the repo key, not just `basename`, which collides
-    // when two repos share a trailing directory name (e.g. `client/app` vs `server/app`).
-    const key = qualify
-      ? `${relative(process.cwd(), report.session.cwd ?? 'unknown') || basename(report.session.cwd ?? 'unknown')}/${branch}`
-      : branch;
-    const bucket = byBranch.get(key);
-    if (bucket === undefined) byBranch.set(key, [report]);
-    else bucket.push(report);
-  }
-
-  const rows = [...byBranch.entries()].map(([branch, group]) => {
-    const worst = group
-      .map((r) => ({ report: r, b: badge(r) }))
-      .sort((a, b) => RISK_ORDER[a.b.verdict] - RISK_ORDER[b.b.verdict])[0]!;
-    const execs = group.reduce((n, r) => n + r.session.execs.length, 0);
-    const edits = group.reduce((n, r) => n + r.session.edits.length, 0);
-    const tokens = group.reduce((n, r) => n + r.session.usage.inputTokens + r.session.usage.outputTokens, 0);
-    return { branch, sessions: group.length, execs, edits, tokens, ...worst };
-  });
-
-  rows.sort((a, b) => RISK_ORDER[a.b.verdict] - RISK_ORDER[b.b.verdict] || b.execs - a.execs);
+  // Grouping, labelling, worst-verdict selection and ranking all live in
+  // `groupBranches`. Recomputing any of it here is how the terminal and the HTML
+  // report end up disagreeing about which branch is worst.
+  const rows = groupBranches(reports);
 
   // Cap branch labels: an unbounded name pushes verdict text off-screen.
-  const maxBranch = Math.min(60, (process.stdout.columns ?? 120) - TAG_WIDTH - 40);
-  const width = Math.max(6, ...rows.map((r) => Math.min(r.branch.length, maxBranch)));
+  const maxBranch = Math.max(12, Math.min(60, (process.stdout.columns ?? 120) - TAG_WIDTH - 40));
+  const width = Math.max(6, ...rows.map((r) => Math.min(r.label.length, maxBranch)));
   const out: string[] = [];
   for (const row of rows) {
-    const style = VERDICT_STYLE[row.b.verdict];
-    const tag = paint(style.code, `${style.mark} ${row.b.verdict}`.padEnd(TAG_WIDTH));
+    const style = VERDICT_STYLE[row.verdict];
+    const tag = paint(style.code, `${style.mark} ${row.verdict}`.padEnd(TAG_WIDTH));
     // Truncate, then pad: truncation removes characters that padding would
     // compensate for; reversing the order under-pads every truncated label.
-    const label = row.branch.length > maxBranch ? row.branch.slice(0, maxBranch - 1) + '…' : row.branch;
-    out.push(`${tag} ${bold(label.padEnd(width))}  ${row.b.text}`);
+    const label = row.label.length > maxBranch ? `${row.label.slice(0, maxBranch - 1)}…` : row.label;
+    out.push(`${tag} ${bold(label.padEnd(width))}  ${row.summary}`);
     out.push(
       dim(
-        `${' '.repeat(TAG_WIDTH + 1 + width + 2)}${plural(row.sessions, 'session')}` +
+        `${' '.repeat(TAG_WIDTH + 1 + width + 2)}${plural(row.reports.length, 'session')}` +
           ` · ${plural(row.execs, 'command')} · ${plural(row.edits, 'edit')} · ${count(row.tokens)} tokens`,
       ),
     );
   }
 
-  const attention = rows.filter((r) => r.b.verdict === 'CONTRADICTED' || r.b.verdict === 'UNSUPPORTED');
+  const attention = rows.filter((r) => r.needsAttention);
   out.push('');
   if (attention.length === 0) {
     out.push(dim('No unsupported execution claims. Nothing here is lying to you about tests.'));
   } else {
     out.push(
-      `${bold('Read first:')} ${attention.map((r) => r.branch).join(', ')} ${dim(`(${attention.length} of ${rows.length} branches)`)}`,
+      `${bold('Read first:')} ${attention.map((r) => r.label).join(', ')} ${dim(`(${attention.length} of ${rows.length} branches)`)}`,
     );
   }
   return out.join('\n');

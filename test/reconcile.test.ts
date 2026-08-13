@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readTranscript } from '../src/transcript.ts';
-import { badge, reconcile, type SessionReport } from '../src/reconcile.ts';
+import { badge, groupBranches, reconcile, type SessionReport } from '../src/reconcile.ts';
 import { transcriptsFor } from '../src/discover.ts';
 import { renderSession, writeTranscriptRoot, type SessionSpec } from './fixtures.ts';
 import { mkdtempSync, writeFileSync } from 'node:fs';
@@ -164,4 +164,61 @@ test('discovery finds sessions by repository path', async () => {
   process.env['LAND_TRANSCRIPT_ROOT'] = root;
   assert.equal(transcriptsFor('/work/repo-one').length, 1);
   delete process.env['LAND_TRANSCRIPT_ROOT'];
+});
+
+/*
+ * Branch labels must be unambiguous *and* readable. Two failure modes were shipped
+ * and fixed: `basename(cwd)` merged unrelated repos that share a trailing directory
+ * name, and a `relative(cwd, …)` label rendered `../../../Users/me/...` and changed
+ * depending on where the command was run from.
+ */
+
+/** A SessionReport with only the fields `groupBranches` reads. */
+function stub(cwd: string, branch: string): SessionReport {
+  return {
+    session: {
+      id: `${cwd}#${branch}`, file: '', cwd, gitBranch: branch,
+      agentVersion: undefined, startedAt: undefined, endedAt: undefined,
+      execs: [], edits: [], utterances: [], models: [], opaqueExecutors: [],
+      usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
+      unparsedLines: 0,
+    },
+    findings: [], runs: [], observedActivities: [], risk: 'low',
+  } as unknown as SessionReport;
+}
+
+test('branch labels use the shortest name that stays unambiguous', () => {
+  const distinct = groupBranches([stub('/home/me/alpha', 'main'), stub('/home/me/beta', 'main')]);
+  assert.deepEqual(distinct.map((r) => r.label).sort(), ['alpha/main', 'beta/main']);
+
+  // Sharing a trailing directory name forces one more segment — but only for these.
+  const collide = groupBranches([stub('/work/client/app', 'main'), stub('/work/server/app', 'main')]);
+  assert.deepEqual(collide.map((r) => r.label).sort(), ['client/app/main', 'server/app/main']);
+
+  // Each path grows only as far as it needs: `y/app` is already unique at depth 2.
+  const three = groupBranches([stub('/a/x/app', 'm'), stub('/b/x/app', 'm'), stub('/c/y/app', 'm')]);
+  assert.deepEqual(three.map((r) => r.label).sort(), ['a/x/app/m', 'b/x/app/m', 'y/app/m']);
+});
+
+test('repos sharing a trailing directory name are never merged', () => {
+  const rows = groupBranches([stub('/work/client/app', 'main'), stub('/work/server/app', 'main')]);
+  assert.equal(rows.length, 2, 'client/app and server/app are unrelated work');
+});
+
+test('labels do not depend on the current working directory', () => {
+  const reports = [stub('/home/me/alpha', 'main'), stub('/var/tmp/beta', 'main')];
+  const before = groupBranches(reports).map((r) => r.label);
+  const original = process.cwd();
+  process.chdir(tmpdir());
+  try {
+    assert.deepEqual(groupBranches(reports).map((r) => r.label), before);
+  } finally {
+    process.chdir(original);
+  }
+});
+
+test('ANSI escapes in a branch name never reach a label', () => {
+  const [row] = groupBranches([stub('/r/one', '\u001B[32mmain\u001B[0m'), stub('/r/two', 'x')]);
+  assert.ok(row !== undefined);
+  assert.doesNotMatch(row.label, /\u001B/);
 });

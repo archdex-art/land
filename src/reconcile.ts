@@ -275,6 +275,38 @@ export interface BranchRow {
   needsAttention: boolean;
 }
 
+/** Git emits coloured branch names when `color.branch` is set; escapes are not identity. */
+function stripAnsi(text: string): string {
+  return text.replace(/\u001B\[[0-9;]*[a-zA-Z]/g, '');
+}
+
+/**
+ * The shortest trailing path segments that still tell two repositories apart.
+ *
+ * `basename` alone is ambiguous — every monorepo has an `app` — and a full path is
+ * unreadable and leaks the reviewer's home directory into a shared report. So:
+ * one segment when that is unique, more only for the paths that actually collide.
+ */
+function shortestUniqueLabels(paths: readonly string[]): Map<string, string> {
+  const segmentsOf = new Map(paths.map((p) => [p, p.split('/').filter((s) => s !== '')]));
+  const labels = new Map<string, string>();
+
+  for (const path of paths) {
+    const segments = segmentsOf.get(path) ?? [];
+    let depth = 1;
+    // Grow the suffix until no other path shares it, or we run out of segments.
+    while (depth < segments.length) {
+      const candidate = segments.slice(-depth).join('/');
+      const collides = paths.some((other) => other !== path && (segmentsOf.get(other) ?? []).slice(-depth).join('/') === candidate);
+      if (!collides) break;
+      depth += 1;
+    }
+    labels.set(path, segments.slice(-depth).join('/') || path || 'unknown');
+  }
+
+  return labels;
+}
+
 /**
  * Collapse sessions into the branch rows both the terminal and the HTML report
  * render. Shared deliberately: two surfaces computing "which branch is worst"
@@ -286,16 +318,19 @@ export function groupBranches(reports: SessionReport[]): BranchRow[] {
   // unrelated work into one row.
   const repos = new Set(reports.map((r) => r.session.cwd ?? ''));
   const qualify = repos.size > 1;
+  const repoLabel = shortestUniqueLabels([...repos]);
 
   const groups = new Map<string, { label: string; reports: SessionReport[] }>();
   for (const report of reports) {
-    const branch = report.session.gitBranch ?? '(no branch)';
-    // Use the full cwd, not just the trailing directory name, to avoid merging
-    // unrelated repos that share a basename (e.g. `client/app` vs `server/app`).
-    const key = qualify ? `${report.session.cwd ?? 'unknown'}/${branch}` : branch;
+    const branch = stripAnsi(report.session.gitBranch ?? '(no branch)');
+    const cwd = report.session.cwd ?? '';
+    // Key on the full cwd — `basename` alone merges unrelated repos that share a
+    // trailing directory name (`client/app` vs `server/app`). The *label* is the
+    // shortest suffix that stays unambiguous, so the common case reads as one word.
+    const key = qualify ? `${cwd}\u0000${branch}` : branch;
     const existing = groups.get(key);
     if (existing === undefined) {
-      const label = qualify ? `${(report.session.cwd ?? 'unknown').split('/').pop()}/${branch}` : branch;
+      const label = qualify ? `${repoLabel.get(cwd) ?? 'unknown'}/${branch}` : branch;
       groups.set(key, { label, reports: [report] });
     } else {
       existing.reports.push(report);
