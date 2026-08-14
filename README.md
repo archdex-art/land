@@ -50,6 +50,25 @@ Every command takes `--json`, and every surface reports the same rows — one pe
 the evidence chain is broken, independent of output format, so `land queue --json`
 works as a CI gate.
 
+### Two sources
+
+By default the read commands parse the transcripts on this machine. Pass
+`--store` explicitly and they read the evidence database instead — the only
+thing that works for a session recorded somewhere else:
+
+```sh
+land ingest --all --store ./evidence.db   # on the machine that ran the agents
+land queue  --all --store ./evidence.db   # anywhere, with no transcripts present
+```
+
+Both sources produce identical verdicts. Verdicts are recomputed on read in
+either case, never read back out of storage, so improving the reconciler never
+has to invalidate stored history.
+
+`land ingest` is incremental in both directions: an unchanged transcript is
+skipped on a `stat` rather than a parse, and a session that was still running
+when it was first ingested gets its new events appended on the next run.
+
 ## Verdicts
 
 | | Meaning |
@@ -109,6 +128,17 @@ Observations are appended to a SQLite database as a SHA-256 hash chain, with
 names the first divergence. Verdicts are *not* stored — they are derived on read,
 so an opinion can never drift from the evidence it describes.
 
+Only the `events` table is append-only. The session row beside it is metadata —
+token totals, end time — which legitimately moves as a session continues;
+rewriting a token count cannot alter what the chain says happened.
+
+Re-ingesting a transcript that has grown appends its new tail. This matters more
+than it sounds: agents write to a transcript *while they work*, so a session
+ingested mid-run is a prefix of the real one. An earlier version treated a known
+session id as a no-op, which meant a store ingested during a run would exonerate
+an agent that a live parse convicts — the lie simply arrived after the snapshot.
+Existing events and their hashes are never touched.
+
 ## Design
 
 ```
@@ -145,7 +175,7 @@ documented upstream:
 node --test "test/*.test.ts"
 ```
 
-40 tests. The reconciliation tests are the specification; the html.ts tests
+44 tests. The reconciliation tests are the specification; the html.ts tests
 encode the XSS defence contract.
 
 ## License

@@ -6,10 +6,10 @@
 | | |
 |---|---|
 | **Project** | `land` (renamed from ArchTerminal — `ADR-016` accepted) |
-| **Tracker version** | 1.2.0 |
-| **Last updated** | 2026-08-13T02:45:00Z |
-| **Phase** | **M1 — Evidence** (shipped + audited; HTML report added) |
-| **Lines of product code** | **2,913** src · **632** test (40 tests) |
+| **Tracker version** | 1.3.0 |
+| **Last updated** | 2026-08-13T04:10:00Z |
+| **Phase** | **M1 — Evidence** (shipped, audited; HTML report + readable evidence store) |
+| **Lines of product code** | **3,265** src · **750** test (44 tests) |
 | **Version control** | ✅ git, `DEBT-007` closed |
 | **Documents** | `README.md`, `ArchTerminal-Research.md`, `ArchTerminal-Review.md`, `PROJECT_TRACKER.md` |
 
@@ -127,7 +127,7 @@ Gate A: *the badge fires correctly across 10 real sessions, with zero false accu
 | True positive | An agent wrote *"Lint clean, 27 tests pass"* while `ruff` printed `Found 1 error.` The test half was true; the lint half was not. |
 | Evidence store | 2,336 events, hash chain verifies; tamper detected at the mutated row with exit 2 |
 | Secrets redacted at write time | 83, including a live Upstash Redis REST token |
-| Tests | **40**, all passing; `tsc --noEmit` clean |
+| Tests | **44**, all passing; `tsc --noEmit` clean |
 | Surfaces | terminal · self-contained HTML report · `--json` — all three from one `groupBranches` code path, asserted in tests |
 
 **Two false accusations were found and fixed during the run**, both from treating the word "check" as test vocabulary (*"the no-duplicate-names check already passed"*, *"its gradient check passing < 1e-5"*). Both are recorded as regression comments in `src/claims.ts`. A third defect was worse than a false accusation and is recorded in `src/reconcile.ts`: a user-**denied** `npm test` was being admitted as evidence *supporting* a claim that tests passed.
@@ -230,7 +230,8 @@ Gate A: *the badge fires correctly across 10 real sessions, with zero false accu
 │  (reconcile.ts)   4 verdicts with abstention (ADR-024)            │
 ├──────────────────────────────────────────────────────────────────┤
 │  Evidence Store   transcript parser ✅ · write-time redaction ✅   │
-│  (store.ts)       hash-chained SQLite ✅ · SLSA export        ⬜   │
+│  (store.ts)       hash-chained SQLite ✅ · incremental append ✅   │
+│                   readable across machines ✅ · SLSA export   ⬜   │
 ├──────────────────────────────────────────────────────────────────┤
 │  Adapters   Claude Code ✅ · worktrees ⬜ · Codex/Cursor ⬜        │
 │             GitHub ⬜ · cmux socket ⬜ · amux REST ⬜ · queues ⬜   │
@@ -267,6 +268,8 @@ Gate A: *the badge fires correctly across 10 real sessions, with zero false accu
 | `ADR-026` | **The UI is one self-contained HTML document, server-rendered by the CLI. No SPA framework, no bundler, no CSS framework, no webfonts.** | ✅ **Accepted 2026-08-13** | `F-030` (send a reviewer *proof*, not a diff) requires a shared artifact that opens with no server, no install, offline, in five years, making **zero network requests** — a bundle that phones home is disqualifying for a privacy-first forensic tool. Only a single inlined HTML file satisfies that. Once it exists, an SPA for the local view is duplicated work: `land ui` and `land share` render the same document from the same code path. Second reason is the threat model: the engine has **0 runtime dependencies** and reads shell output from beside `.env` files and SSH sockets; React + Next + Tailwind + shadcn would add ~300 transitive packages of supply-chain surface to a security product. Bug count tracks dependency count and build-config surface, and both are zero here. Cost: no component ecosystem, and all UI is hand-written — acceptable because the entire surface is **one screen** (`§1`), which is a product constraint, not a stage. Revisit only if the surface grows past ~3 views or needs live-updating state. |
 | `ADR-027` | **HTML escaping is a security control, not a formatting detail** | ✅ **Accepted 2026-08-13** | Evidence bundles embed agent shell commands and captured output, then get **sent to another human**. Unescaped output is stored XSS with a delivery mechanism. Every interpolation goes through one escaper, tested against `</script>`, attribute breakouts and `javascript:` URLs; the document sets a restrictive `Content-Security-Policy` meta and carries no inline event handlers. This is why templating stays hand-written and auditable rather than assembled from string concatenation scattered across modules. |
 | `ADR-028` | **Aesthetic direction: forensic instrument. Testimony in serif, evidence in monospace.** | ✅ **Accepted 2026-08-13** | The `ui-ux-pro-max` database recommended "Modern Dark (Cinema Mobile)" — glassmorphism, blur, indigo glow, Inter via Google Fonts CDN. Rejected: the CDN import breaks self-containment (`ADR-026`), and blur/glow is a mobile-media aesthetic on a document whose job is to look like a *record*. **Its structural rules were kept**: dark primary, dense spacing scale, no pure `#000`, AA contrast on accents, visible focus, `prefers-reduced-motion`, SVG not emoji. The direction instead: near-monochrome, hairline rules, tabular numerals, one saturated colour on screen at a time (the verdict). The organising idea is a court exhibit — what the agent *said* is set in serif, what was *observed* is set in monospace, so the two are never visually confusable. Type comes from system stacks only, per `ADR-026`. |
+| `ADR-029` | **A growing transcript is appended to the chain, never refused** | ✅ **Accepted 2026-08-13** | Agents write to a transcript *while they work*, so any ingest during a run captures a prefix. The prior rule ("a changed transcript must be recorded as a new session id or not at all") sounded principled and was actively dangerous: it froze mid-run sessions forever, so a store could `VERIFIED` an agent that a live parse `CONTRADICTED` (`DEBT-027`). Appending is the correct reading of an append-only log — a longer session is *more observations*, not rewritten ones. Only `seq` values beyond the stored high-water mark are added, so existing events and every hash over them stay byte-identical. Corollary: `events` is append-only by trigger, while the session row beside it is metadata (token totals, end time) that legitimately moves; rewriting a token count cannot alter what the chain says happened. |
+| `ADR-030` | **Two read sources, chosen explicitly by `--store`; never inferred** | ✅ **Accepted 2026-08-13** | `queue`/`evidence`/`ui` parse local transcripts by default and read the evidence store when `--store` is typed. The rejected alternative — "read the store when one exists" — silently changes a command's data source the moment someone runs `ingest`, which is exactly the kind of invisible state a forensic tool must not have. An explicit path is also the honest signal for the cases that *only* the store can serve: a session from another machine, a transcript the agent has rotated away, and CI, where transcripts never exist. Verdicts are recomputed from stored observations on every read (`ADR-025`), so both sources agree — verified at 18/18 identical on the real corpus. |
 
 ---
 
@@ -291,8 +294,8 @@ Documentation debt from the review is now closed. New entries below it are **cod
 | `DEBT-011` | Ambiguous competitor names (`cmux`×2, `amux`×3 repos, `Conductor`×3) undisambiguated | 🟡 | ⬜ Open | Research §3 | Add disambiguation notes |
 | `DEBT-012` | Missed threat class: PTY-provenance startups (Ed25519 shell ledgers, eBPF monitors) | 🟠 | ✅ Fixed in Review §5.6 | Research §9 | Backport to risk table |
 | `DEBT-013` | **Claim extraction is regex on prose.** Precision guards are empirical, tuned against one 18-session corpus. A different writing style will surface new false positives | 🟠 | ⬜ Open | `src/claims.ts` | Every new false positive becomes a named regression comment + fixture. Revisit only if the guard list stops converging |
-| `DEBT-014` | **`land ingest` re-reads and re-parses every transcript on each run**; skip is decided after parsing | 🟡 | ⬜ Open | `src/store.ts`, `src/cli.ts` | Record source file size + mtime per session and skip before parse |
-| `DEBT-015` | **No `.land/` store is written by `queue`/`evidence`** — they parse live each time, so there is no cross-machine or historical view | 🟡 | ⬜ Open | `src/cli.ts` | Read from the store when present, fall back to live parse |
+| `DEBT-014` | **`land ingest` re-read and re-parsed every transcript on each run**; the skip was decided after parsing | 🟡 | ✅ **Fixed 2026-08-13** | `src/store.ts`, `src/cli.ts` | Schema v2 records source size+mtime; skip by `stat`. 0.38s → 0.09s on the no-op path, and cost now scales with file count, not transcript size |
+| `DEBT-015` | **The hash chain was write-only** — `ingest` wrote it, `verify` checked it, nothing read it. `queue`/`evidence`/`ui` re-parsed transcripts, so a session from another machine or from CI was invisible | 🟠 | ✅ **Fixed 2026-08-13** | `src/store.ts`, `src/cli.ts` | `EvidenceStore.read()` rebuilds sessions from chained events; explicit `--store` reads it. 18/18 round-trip identical on the real corpus |
 | `DEBT-016` | **`opaqueExecutors` triggers session-wide abstention**, not per-activity. One MCP eval tool suppresses accusations about lint as well as tests | 🟡 | ⬜ Open | `src/reconcile.ts` | Acceptable while precision is the binding constraint; narrow when recall starts mattering |
 | `DEBT-017` | **Single-agent format only.** Codex, Cursor (SQLite `state.vscdb`), opencode (SQLite), Aider (markdown) are unsupported, so `LIM-005` bites immediately outside Claude Code | 🟠 | ⬜ Open | `src/transcript.ts` | `F-019`; the `Session` type is already format-agnostic |
 | `DEBT-018` | **Branch names were rendered unsanitised.** Git emits coloured names via `color.branch`; an embedded ANSI reset terminated styling early and the escape bytes counted toward padding width | 🟡 | ✅ **Fixed 2026-08-13** | `src/render.ts` | `stripAnsi` before grouping; truncate to terminal width |
@@ -304,6 +307,7 @@ Documentation debt from the review is now closed. New entries below it are **cod
 | `DEBT-024` | **Three surfaces recomputed grouping independently.** `renderQueue` reimplemented what `groupBranches` owned and `reconcile.ts` documents as shared "deliberately" | 🟠 | ✅ **Fixed 2026-08-13** | `src/render.ts` | Deleted 46 lines; `renderQueue` consumes `groupBranches` |
 | `DEBT-025` | **`land queue --json` reported sessions under a key named `branches`** — 18 rows against the terminal's 11 for identical input | 🟠 | ✅ **Fixed 2026-08-13** | `src/cli.ts` | Consumes `groupBranches`; invariant asserted in tests |
 | `DEBT-026` | **`--json` always exited 0**, so the CI gate the README promises did not exist: piping to a machine consumer silently disabled the signal | 🔴 | ✅ **Fixed 2026-08-13** | `src/cli.ts` | Exit code is now format-independent |
+| `DEBT-027` | **🔴 A session ingested mid-run was frozen at that moment, permanently.** Agents append to a transcript *while they work*, so `ingest` during a run stored a prefix; treating a known session id as a no-op then discarded every later event forever. **A store ingested during a run would `VERIFIED`/exonerate an agent that a live parse `CONTRADICTED`** — the lie simply arrived after the snapshot. Reproduced: store held 3 events and missed a contradicted lint claim entirely | 🔴 | ✅ **Fixed 2026-08-13** | `src/store.ts` | `ingest` appends events beyond the stored high-water mark; existing events and hashes stay byte-identical. Regression test confirmed to fail against the old behaviour |
 
 ---
 
@@ -316,7 +320,7 @@ Documentation debt from the review is now closed. New entries below it are **cod
 | `LIM-003` | **Precision target caps recall at ~60–76%** | We will miss real conflicts | Deliberate. `UNKNOWN` tier must be visible, never silent |
 | `LIM-004` | **3 languages only** (TS → Py → Rust) | Other stacks get `UNKNOWN` | `ADR-015`; never a silent false negative |
 | `LIM-005` | **Transcript coverage depends on the agent emitting structured logs** | Non-emitting agents degrade to PTY fallback | `F-018` |
-| `LIM-006` | **Local-only until M4** | The buyer (eng manager) lives in CI | `F-032` moved into M4 |
+| `LIM-006` | **No CI surface yet** — the *store* is now portable and readable off-machine (`DEBT-015`), so the blocker is packaging, not architecture | The buyer (eng manager) lives in CI | `F-032`, now unblocked |
 | `LIM-007` | **No monorepo support until v2** | Weakest exactly where agents are most useful | `F-046` |
 | `LIM-008` | **Detection without resolution** — we flag and hold, we don't fix | Half a product for the held branch | `F-045` |
 | `LIM-009` | **Cold start** — full value needs ≥3 parallel agents, a small population today | Slow early adoption | `ADR-009` — evidence works for a single agent |
@@ -332,8 +336,9 @@ Documentation debt from the review is now closed. New entries below it are **cod
 1. 🔴 **`F-020` — the 50-session labelled corpus (M2).** This is the gate that can *kill* the M3 plan cheaply, and it is now the only thing standing between us and eleven weeks of engine work. `Q-004` is its prerequisite and is still unanswered: the development corpus contains 18 sessions across 11 branches but **no genuine parallel-agent session**, so we currently have no evidence that concurrent agent branches collide in practice. Do not start `F-021` before this.
 2. 🟠 **`DEBT-017` / `F-019` — a second agent format.** The wedge is vendor-neutrality (`G5`, Review §5.7 rank 6) and we support exactly one vendor. Codex CLI or opencode next; both are cheap because `Session` is already format-agnostic.
 3. 🟠 **Put `land` in front of real users.** The product is usable today and answers a real question for a *single* agent, which is `ADR-009`'s entire argument and the fix for `LIM-009`. Shipping now also grows the corpus `F-020` needs.
-4. 🟡 **`DEBT-014`/`DEBT-015` — make the store load-bearing.** `queue` and `evidence` currently re-parse from scratch and ignore the database they can write, so the hash chain is a feature nothing consumes yet.
+4. 🟠 **`F-032` — GitHub Action / CI mode.** Newly unblocked: `DEBT-015` is closed, so `land queue --store ev.db` now gates on a machine with no transcripts, which is the only environment CI has. This is the shortest path to the buyer (an engineering manager), who lives in CI and not in a local terminal.
 5. 🟡 **`F-016b` — socket API.** Review §5.5: this is how `land` becomes the verification pane inside cmux/amux rather than another thing to open.
+6. 🟡 **`F-029`/`F-030` — signed, shareable bundle.** The artifact exists (`land ui`) and the store is now portable; what is missing is attestation so a reviewer can trust a `.db` they did not produce.
 
 **Explicitly not next:** `F-021` (conflict engine). It is eleven weeks gated behind a benchmark we have not built, and `ADR-009` exists precisely to stop us starting it early.
 
@@ -353,6 +358,33 @@ Documentation debt from the review is now closed. New entries below it are **cod
 ## 9. Change Log
 
 > **Append-only.** Newest first. Never edit or delete an existing entry — supersede it with a new one.
+
+---
+
+### `LOG-0007` — 2026-08-13T04:10:00Z
+
+| | |
+|---|---|
+| **Version** | tracker `1.3.0` · `land` `0.1.0` · store schema `v2` |
+| **Category** | Feature / Fix / Architecture |
+| **Files changed** | `src/store.ts`, `src/cli.ts`, `src/reconcile.ts`, `test/store.test.ts`, `README.md`, `PROJECT_TRACKER.md` |
+| **Author** | AI (Claude, Agent SDK) |
+
+**Summary.** Made the evidence store load-bearing. `EvidenceStore.read()` rebuilds sessions from the chain, and an explicit `--store` makes `queue`/`evidence`/`ui` read it instead of parsing transcripts. Closes `DEBT-014` and `DEBT-015`; found and fixed `DEBT-027`, the most serious defect in the project so far. 44 tests.
+
+**Reason.** The chain was write-only: `ingest` wrote it, `verify` checked it, and nothing read it. Every strategic gap identified in the competitive teardown — CI gating, team sharing, cross-machine review — was blocked behind that one fact, because a session recorded anywhere but this machine was invisible.
+
+**Reads preserve `ADR-025`.** Verdicts are still recomputed on read, never read back out of storage. `reconcile(session, claims?)` accepts the claims recorded at ingest because `utterances` are deliberately not retained — only the sentences extracted from them. The honest consequence, now documented at the call site: a stored session reflects the extractor as it was at ingest, so improving the extractor changes what a live re-parse sees, not what history recorded. That is the correct behaviour for an audit log.
+
+**`DEBT-027` — the store could exonerate a lying agent.** Agents append to a transcript *while they work*, so a session ingested mid-run is a prefix of the real one. `ingest` treated a known session id as a no-op, which permanently discarded every later event. Reproduced on a synthetic growing session: the store held 3 events and missed a `CONTRADICTED` lint claim entirely, while a live parse of the same file convicted. **For a product whose entire value is being the trustworthy record, a store that silently disagrees with the truth is the worst possible failure.** `ingest` now appends events beyond the stored high-water mark; existing events and their hashes stay byte-identical and the chain still verifies. The regression test was confirmed to fail against the old behaviour before being kept.
+
+**Found by smoke-testing, not by reading.** The defect surfaced while testing an unrelated performance fix (`DEBT-014`): the test asserted that a modified transcript still gets parsed, and the wrong thing was skipped for the wrong reason. This is the third consecutive session where the serious bugs came from running the tool and reading its output as a user, and the reviews came back clean.
+
+**Ingest cost (`DEBT-014`).** Schema v2 records source size and mtime, so an unchanged transcript is skipped on a `stat` instead of a full parse: **0.38s → 0.09s** on the no-op path, and cost now scales with file count rather than transcript size. Migration is additive and nullable; `events` is never touched. Verified against a hand-built v1 store.
+
+**Impact.** On a machine with zero transcripts reachable, all three surfaces work from the portable `.db` alone and agree exactly: 11 branches from `queue`, `--json`, and the HTML report. On the real corpus, 18/18 sessions round-trip with identical verdict, badge text, and finding/run/exec counts; the chain verifies at 2,336 events with an unchanged head hash. `land queue --store` exits 1 on a contradiction, so the CI gate now works without transcripts — which is what `F-032` needs.
+
+**Behaviour change.** `land ingest` output now distinguishes `extended N running sessions` from new ones. The old wording reported an append as "1 new session", hiding the fact that mid-flight sessions get topped up on later runs.
 
 ---
 
