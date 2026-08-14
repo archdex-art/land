@@ -5,11 +5,12 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { canonical, EvidenceStore, GENESIS, linkHash } from '../src/store.ts';
 import { readTranscript } from '../src/transcript.ts';
+import { badge, reconcile } from '../src/reconcile.ts';
 import { redact, redactAndTruncate } from '../src/redact.ts';
 import { renderSession, type SessionSpec } from './fixtures.ts';
 
@@ -170,4 +171,121 @@ test('truncation happens after redaction so no secret survives at the cut', () =
   const { text, truncated } = redactAndTruncate(padded, 200);
   assert.equal(truncated, true);
   assert.doesNotMatch(text, /ghp_0123/);
+});
+
+/*
+ * The store is only worth having if it can be *read*. These tests cover the
+ * promise that a stored session yields the same verdict as a live parse, and the
+ * bug that made that false: a session ingested while the agent was still working
+ * was frozen at that moment, and every later event — including the lie that
+ * makes it CONTRADICTED — was silently discarded forever.
+ */
+
+test('a stored session reconciles to the same verdict as a live parse', async () => {
+  const script: SessionSpec['script'] = [
+    { exec: { command: 'ruff check src', stdout: 'Found 1 error.', exitCode: 1 } },
+    { say: 'Lint clean, all green.' },
+  ];
+  const spec: SessionSpec = { id: 'roundtrip', cwd: '/repo', branch: 'agent-a', script };
+  const file = join(mkdtempSync(join(tmpdir(), 'land-rt-')), 'f.jsonl');
+  writeFileSync(file, renderSession(spec));
+
+  const session = await readTranscript(file);
+  const liveBadge = badge(reconcile(session));
+
+  const store = new EvidenceStore(':memory:');
+  store.ingest(session);
+  const stored = store.read();
+  assert.equal(stored.length, 1);
+
+  const storedBadge = badge(reconcile(stored[0]!.session, stored[0]!.claims));
+  assert.equal(storedBadge.verdict, liveBadge.verdict);
+  assert.equal(storedBadge.text, liveBadge.text);
+  assert.equal(storedBadge.verdict, 'CONTRADICTED');
+  store.close();
+});
+
+test('re-ingesting a grown transcript appends only its new events', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'land-grow-'));
+  const file = join(dir, 'f.jsonl');
+  const store = new EvidenceStore(':memory:');
+
+  // The session as it looked mid-flight: a passing test run, honestly reported.
+  const early: SessionSpec = {
+    id: 'growing', cwd: '/repo', branch: 'agent-a',
+    script: [{ exec: { command: 'npm test', stdout: 'Tests: 2 passed' } }, { say: 'All tests pass.' }],
+  };
+  writeFileSync(file, renderSession(early));
+  const first = store.ingest(await readTranscript(file));
+  assert.equal(first.skipped, false);
+  assert.equal(first.appended, false);
+
+  // The agent kept working and then lied about lint.
+  const grown: SessionSpec = {
+    id: 'growing', cwd: '/repo', branch: 'agent-a',
+    script: [
+      { exec: { command: 'npm test', stdout: 'Tests: 2 passed' } },
+      { say: 'All tests pass.' },
+      { exec: { command: 'ruff check src', stdout: 'Found 1 error.', exitCode: 1 } },
+      { say: 'Lint clean.' },
+    ],
+  };
+  writeFileSync(file, renderSession(grown));
+  const second = store.ingest(await readTranscript(file));
+  assert.equal(second.appended, true, 'the tail must be appended, not discarded');
+  assert.ok(second.events > 0);
+
+  // The store must now convict, exactly as a live parse of the full transcript does.
+  const stored = store.read()[0]!;
+  assert.equal(badge(reconcile(stored.session, stored.claims)).verdict, 'CONTRADICTED');
+  assert.equal(store.verify().ok, true, 'appending must not break the chain');
+
+  // And a third pass with no further change adds nothing.
+  const third = store.ingest(await readTranscript(file));
+  assert.equal(third.skipped, true);
+  assert.equal(third.events, 0);
+  store.close();
+});
+
+test('seenFile skips only a byte-identical transcript', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'land-seen-'));
+  const file = join(dir, 'f.jsonl');
+  const spec: SessionSpec = {
+    id: 'seen', cwd: '/repo', branch: 'agent-a',
+    script: [{ exec: { command: 'npm test', stdout: 'Tests: 1 passed' } }, { say: 'The test passes.' }],
+  };
+  writeFileSync(file, renderSession(spec));
+
+  const store = new EvidenceStore(':memory:');
+  const stat = statSync(file);
+  store.ingest(await readTranscript(file), { size: stat.size, mtime: String(stat.mtimeMs) });
+
+  assert.equal(store.seenFile(file, stat.size, String(stat.mtimeMs)), true);
+  // Any change to size or mtime must force a parse rather than a skip.
+  assert.equal(store.seenFile(file, stat.size + 1, String(stat.mtimeMs)), false);
+  assert.equal(store.seenFile(file, stat.size, '0'), false);
+  assert.equal(store.seenFile('/nowhere/else.jsonl', stat.size, String(stat.mtimeMs)), false);
+  store.close();
+});
+
+test('store filters narrow by repo, branch, and session prefix', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'land-filter-'));
+  const store = new EvidenceStore(':memory:');
+  for (const [id, cwd, branch] of [
+    ['aaa-one', '/work/alpha', 'main'],
+    ['bbb-two', '/work/beta', 'main'],
+    ['ccc-three', '/work/alpha', 'feature'],
+  ] as const) {
+    const file = join(dir, `${id}.jsonl`);
+    writeFileSync(file, renderSession({ id, cwd, branch, script: [{ say: 'All tests pass.' }] }));
+    store.ingest(await readTranscript(file));
+  }
+
+  assert.equal(store.read().length, 3);
+  assert.equal(store.read({ repo: '/work/alpha' }).length, 2);
+  assert.equal(store.read({ branch: 'feature' }).length, 1);
+  assert.equal(store.read({ repo: '/work/alpha', branch: 'main' }).length, 1);
+  assert.equal(store.read({ session: 'bbb' }).length, 1);
+  assert.equal(store.read({ session: 'zzz' }).length, 0);
+  store.close();
 });

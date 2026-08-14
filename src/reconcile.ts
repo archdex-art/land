@@ -210,9 +210,23 @@ function judge(claim: Claim, runs: ObservedRun[], session: Session): Finding {
   };
 }
 
-export function reconcile(session: Session): SessionReport {
+/**
+ * Derive a report for one session.
+ *
+ * `claims` is supplied when the session was rebuilt from the evidence store,
+ * where utterances are not retained — only the claim sentences extracted at
+ * ingest time. That preserves `ADR-025`: claims are *observations* (the agent
+ * did say this sentence) and the verdict is still recomputed on read from the
+ * stored claim and the stored runs, never read back from storage.
+ *
+ * The honest consequence: a stored session reflects the extractor as it was at
+ * ingest. Improving the extractor changes what a live re-parse sees, not what
+ * history recorded — which is the correct behaviour for an audit log.
+ */
+export function reconcile(session: Session, claims?: readonly Claim[]): SessionReport {
   const runs = observedRuns(session);
-  const findings = claimsFromSession(session).map((claim) => judge(claim, runs, session));
+  const subjects = claims ?? claimsFromSession(session);
+  const findings = subjects.map((claim) => judge(claim, runs, session));
   const activities = new Set<Activity>(runs.map((r) => r.activity));
 
   const risk: SessionReport['risk'] = findings.some((f) => f.verdict === 'CONTRADICTED')

@@ -13,7 +13,7 @@
 
 import { parseArgs } from 'node:util';
 import { dirname, join, resolve } from 'node:path';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { allTranscripts, transcriptsFor } from './discover.ts';
@@ -28,7 +28,7 @@ const OUTPUT_VERSION = 1;
 const USAGE = `land — prove what your coding agents actually ran
 
 usage
-  land queue    [--repo <path>] [--branch <name>] [--json]
+  land queue    [--repo <path>] [--branch <name>] [--store <path>] [--json]
       Risk-ranked view of every agent branch. Start here.
 
   land evidence [--repo <path>] [--branch <name>] [--session <id>] [--json]
@@ -39,7 +39,8 @@ usage
       no network requests — send it to a reviewer as proof.
 
   land ingest   [--repo <path>] [--all] [--store <path>] [--json]
-      Append sessions to the hash-chained evidence store.
+      Append sessions to the hash-chained evidence store. Re-running extends
+      sessions that were still in progress; it never rewrites what is stored.
 
   land verify   [--store <path>] [--json]
       Recompute the evidence chain and report the first divergence.
@@ -48,7 +49,10 @@ options
   --repo <path>     repository to analyse (default: cwd)
   --branch <name>   restrict to one git branch
   --session <id>    restrict to one session id (prefix match)
-  --store <path>    evidence database (default: <repo>/.land/evidence.db)
+  --store <path>    evidence database (default: <repo>/.land/evidence.db).
+                    Passing it to queue/evidence/ui reads that store instead of
+                    parsing local transcripts — use it for sessions recorded on
+                    another machine, or in CI where transcripts do not exist.
   --all             every transcript on this machine, not just this repo
   --out <file>      where to write the HTML report (default: a temp file)
   --no-open         write the report but do not launch a browser
@@ -67,6 +71,12 @@ interface Options {
   branch: string | undefined;
   session: string | undefined;
   store: string;
+  /**
+   * True when `--store` was typed, not defaulted. On a read command that is the
+   * signal to read the evidence store instead of re-parsing transcripts — which
+   * is the only thing that works for a session from another machine.
+   */
+  storeExplicit: boolean;
   all: boolean;
   json: boolean;
   limit: number;
@@ -102,6 +112,7 @@ function parse(argv: string[]): { command: string; options: Options } {
       branch: values.branch,
       session: values.session,
       store: values.store === undefined ? join(repo, '.land', 'evidence.db') : resolve(values.store),
+      storeExplicit: values.store !== undefined,
       all: values.all === true,
       json: values.json === true,
       limit: values.limit === undefined ? 200 : Number(values.limit),
@@ -112,11 +123,17 @@ function parse(argv: string[]): { command: string; options: Options } {
 }
 
 /**
- * Read and reconcile the sessions in scope. Transcript reads happen in parallel
- * because they are IO-bound and independent; a repo with 200 sessions is
- * otherwise dominated by sequential file reads.
+ * Read and reconcile the sessions in scope.
+ *
+ * Two sources, chosen explicitly. An explicit `--store` reads the evidence
+ * store: the only source that works for a session recorded on another machine,
+ * or one whose transcript the agent has since rotated away. Otherwise
+ * transcripts are parsed live, in parallel — they are IO-bound and independent,
+ * and a repo with 200 sessions is otherwise dominated by sequential reads.
  */
 async function load(options: Options): Promise<SessionReport[]> {
+  if (options.storeExplicit) return loadFromStore(options);
+
   const files = options.all ? allTranscripts() : transcriptsFor(options.repo);
   const sessions = await Promise.all(
     files.slice(0, options.limit).map(async (file) => {
@@ -138,8 +155,60 @@ async function load(options: Options): Promise<SessionReport[]> {
     return s.execs.length > 0 || s.utterances.length > 0;
   });
 
-  return inScope.map(reconcile).sort((a, b) => (a.session.startedAt ?? '').localeCompare(b.session.startedAt ?? ''));
+  // Explicit arrow, not a bare `.map(reconcile)`: `reconcile` takes optional
+  // claims as its second parameter, which `map` would fill with the array index.
+  return inScope
+    .map((s) => reconcile(s))
+    .sort((a, b) => (a.session.startedAt ?? '').localeCompare(b.session.startedAt ?? ''));
 }
+
+/**
+ * Reconcile sessions held in the evidence store.
+ *
+ * Verdicts are recomputed here from the stored claims and the stored execs, per
+ * `ADR-025` — nothing reads a verdict back out of storage. A missing store is a
+ * plain message, not a stack trace: pointing at a store that was never written
+ * is an ordinary mistake.
+ */
+function loadFromStore(options: Options): SessionReport[] {
+  if (!existsSync(options.store)) {
+    process.stderr.write(`land: no evidence store at ${options.store}. Run 'land ingest --store <path>' first.\n`);
+    return [];
+  }
+  const store = new EvidenceStore(options.store);
+  try {
+    const stored = store.read({
+      // `--all` means every repository in the store, so the repo filter drops.
+      ...(options.all ? {} : { repo: options.repo }),
+      ...(options.branch === undefined ? {} : { branch: options.branch }),
+      ...(options.session === undefined ? {} : { session: options.session }),
+    });
+    return stored
+      .slice(0, options.limit)
+      .map(({ session, claims }) => reconcile(session, claims))
+      .sort((a, b) => (a.session.startedAt ?? '').localeCompare(b.session.startedAt ?? ''));
+  } finally {
+    store.close();
+  }
+}
+
+/**
+ * Size and mtime of a transcript, or `undefined` if it cannot be read.
+ *
+ * A file that vanishes between discovery and stat is not an error worth
+ * stopping for — it just means this run cannot use the fast skip path.
+ */
+function statSafe(file: string): { size: number; mtime: string } | undefined {
+  try {
+    const s = statSync(file);
+    return { size: s.size, mtime: String(s.mtimeMs) };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Local to the CLI: `render.ts` owns terminal formatting, and this is not that. */
+const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`;
 
 function emptyMessage(options: Options): string {
   return options.all
@@ -241,25 +310,45 @@ async function cmdEvidence(options: Options): Promise<number> {
 async function cmdIngest(options: Options): Promise<number> {
   const files = options.all ? allTranscripts() : transcriptsFor(options.repo);
   const store = new EvidenceStore(options.store);
-  const results: Array<{ file: string; sessionId: string; events: number; skipped: boolean }> = [];
+  const results: Array<{ file: string; sessionId: string; events: number; skipped: boolean; appended: boolean }> = [];
   const redactions: Record<string, number> = {};
   try {
     for (const file of files.slice(0, options.limit)) {
+      // Stat before parse. The session id lives inside the transcript, so the
+      // skip test used to require reading and parsing the whole file first —
+      // a repo with 200 unchanged sessions paid full parse cost to learn it had
+      // nothing to do. Any edit moves size or mtime, so changes still parse.
+      const stat = statSafe(file);
+      if (stat !== undefined && store.seenFile(file, stat.size, stat.mtime)) {
+        results.push({ file, sessionId: '', events: 0, skipped: true, appended: false });
+        continue;
+      }
       const session = await readTranscript(file);
       if (!options.all && session.cwd !== undefined && !session.cwd.startsWith(options.repo)) continue;
-      const result = store.ingest(session);
+      const result = store.ingest(session, stat);
       for (const [kind, n] of Object.entries(result.redactions)) redactions[kind] = (redactions[kind] ?? 0) + n;
-      results.push({ file, sessionId: result.sessionId, events: result.events, skipped: result.skipped });
+      results.push({
+        file,
+        sessionId: result.sessionId,
+        events: result.events,
+        skipped: result.skipped,
+        appended: result.appended,
+      });
     }
     const head = store.headHash();
     if (options.json) {
       process.stdout.write(`${JSON.stringify({ version: OUTPUT_VERSION, store: options.store, head, redactions, sessions: results }, null, 2)}\n`);
     } else {
-      const added = results.filter((r) => !r.skipped);
-      const events = added.reduce((n, r) => n + r.events, 0);
+      // A grown session is not a new one. Reporting both as "new" hid the fact
+      // that mid-flight sessions get topped up on every run.
+      const fresh = results.filter((r) => !r.skipped && !r.appended);
+      const grown = results.filter((r) => r.appended);
+      const events = results.reduce((n, r) => n + r.events, 0);
+      const parts = [`ingested ${plural(fresh.length, 'new session')} (${events} events)`];
+      if (grown.length > 0) parts.push(`extended ${plural(grown.length, 'running session')}`);
+      parts.push(`${results.filter((r) => r.skipped).length} unchanged`);
       process.stdout.write(
-        `ingested ${added.length} new session${added.length === 1 ? '' : 's'} (${events} events), ` +
-          `${results.length - added.length} already present\n` +
+        `${parts.join(', ')}\n` +
           `redactions: ${Object.keys(redactions).length === 0 ? 'none' : Object.entries(redactions).map(([k, v]) => `${k}×${v}`).join(', ')}\n` +
           `store: ${options.store}\nhead: ${head.slice(0, 16)}…\n`,
       );
