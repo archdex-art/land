@@ -1,5 +1,21 @@
-# archterminal_docs is docs-only. Everything except Markdown is ignored by default.
-*
-!*.md
-!.gitignore
-!*/
+# Rust
+/target
+**/*.rs.bk
+
+# Local evidence stores / scratch
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+/tmp
+/.land
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Node (web UI, later)
+node_modules/
+dist/
