@@ -23,6 +23,25 @@ async function seeded(script: SessionSpec['script']) {
   return { store, result };
 }
 
+/*
+ * Fixtures below are structurally valid and semantically obvious. They have to
+ * match the production regexes — that is the whole point of the test — but both
+ * a scanner and a human should read them as synthetic at a glance.
+ *
+ * This is not hypothetical: GitHub push protection blocked an earlier version of
+ * this file, reporting leaked Supabase, Twilio and Shopify credentials. The
+ * fixtures were fake, but they were shaped like the real thing, which is exactly
+ * what a detector is built to catch. Composing them from a visible marker keeps
+ * the test honest without teaching anyone to click "allow secret".
+ *
+ * The marker must not *begin* with `example`: `redact` deliberately skips values
+ * starting with `example`/`changeme`/`your…` as documentation placeholders, so a
+ * fixture named that way would silently test nothing. Found exactly that way.
+ */
+const FAKE = 'NOT_A_REAL_TOKEN_EXAMPLE'; // charset A-Za-z0-9_
+const FAKE_ALNUM = 'NOTAREALTOKENEXAMPLE'; // charset A-Za-z0-9, for alnum-only rules
+const FAKE_HEX = 'deadbeef'; // charset a-f0-9, for hex-only rules
+
 test('canonical form is key-order independent', () => {
   assert.equal(canonical({ b: 1, a: [2, { d: 4, c: 3 }] }), canonical({ a: [2, { c: 3, d: 4 }], b: 1 }));
   assert.equal(canonical({ a: 1, skip: undefined }), '{"a":1}');
@@ -90,8 +109,8 @@ test('secrets never reach the store', async () => {
   const { store, result } = await seeded([
     {
       exec: {
-        command: 'AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY aws s3 ls',
-        stdout: 'token=ghp_abcdefghijklmnopqrstuvwxyz0123456789 exported',
+        command: `AWS_SECRET_ACCESS_KEY=${FAKE_ALNUM}${'0'.repeat(20)} aws s3 ls`,
+        stdout: `token=ghp_${FAKE_ALNUM}${'0'.repeat(16)} exported`,
       },
     },
   ]);
@@ -100,8 +119,8 @@ test('secrets never reach the store', async () => {
     .all()
     .map((r) => String(r['payload']))
     .join('\n');
-  assert.doesNotMatch(payloads, /wJalrXUtnFEMI/);
-  assert.doesNotMatch(payloads, /ghp_abcdefghijklmnopqrstuvwxyz/);
+  assert.doesNotMatch(payloads, new RegExp(FAKE_ALNUM));
+  assert.doesNotMatch(payloads, /ghp_/);
   assert.match(payloads, /«redacted:/);
   assert.ok(Object.keys(result.redactions).length > 0);
   store.close();
@@ -109,24 +128,25 @@ test('secrets never reach the store', async () => {
 
 test('redaction covers the credential families that matter', () => {
   const cases: Array<[string, string]> = [
+    // AWS publishes these two verbatim as documentation examples.
     ['AKIAIOSFODNN7EXAMPLE', 'aws-access-key'],
-    ['ghp_0123456789abcdefghijklmnopqrstuvwx', 'github-token'],
-    ['sk-ant-api03-abcdefghijklmnopqrstuvwxyz', 'anthropic-key'],
-    ['AIzaSyD-1234567890abcdefghijklmnopqrstu', 'google-api-key'],
+    [`ghp_${FAKE_ALNUM}${'0'.repeat(16)}`, 'github-token'],
+    [`sk-ant-api03-${FAKE}`, 'anthropic-key'],
+    [`AIza${FAKE}___________`, 'google-api-key'],
     ['postgres://user:hunter2@db.internal:5432/app', 'pg-url'],
-    ['Authorization: Bearer abcdefghijklmnopqrstuvwxyz012345', 'bearer'],
+    [`Authorization: Bearer ${FAKE}`, 'bearer'],
     // Modern platform tokens: agents hit these during deploys and migrations.
-    ['sbp_NOT_A_REAL_TOKEN_EXAMPLE_0000', 'supabase-key'],
-    ['glpat-xxxxxxxxxxxxxxxxxxxx', 'gitlab-token'],
-    ['SG.abcdefghij1234567890.klmnopqrst1234567890', 'sendgrid-key'],
-    ['SKdeadbeefdeadbeefdeadbeefdeadbeef', 'twilio-key'],
-    ['lin_api_0123456789abcdef0123456789abcdef', 'linear-key'],
-    [`dop_v1_${'a'.repeat(64)}`, 'digitalocean-token'],
-    [`shp${'at'}_${'deadbeef'.repeat(4)}`, 'shopify-token'],
-    ['figd_abcdefghij1234567890abcd', 'figma-token'],
-    [`gsk_${'a'.repeat(40)}`, 'groq-key'],
-    [`xai-${'z'.repeat(40)}`, 'xai-key'],
-    ['dp.pt.abcdefghij1234567890abcd', 'doppler-token'],
+    [`sbp_${FAKE}_0000`, 'supabase-key'],
+    [`glpat-${FAKE}`, 'gitlab-token'],
+    [`SG.${FAKE}.${FAKE}`, 'sendgrid-key'],
+    [`SK${FAKE_HEX.repeat(4)}`, 'twilio-key'],
+    [`lin_api_${FAKE_ALNUM}${'0'.repeat(12)}`, 'linear-key'],
+    [`dop_v1_${FAKE_HEX.repeat(8)}`, 'digitalocean-token'],
+    [`shpat_${FAKE_HEX.repeat(4)}`, 'shopify-token'],
+    [`figd_${FAKE}`, 'figma-token'],
+    [`gsk_${FAKE_ALNUM}${'0'.repeat(20)}`, 'groq-key'],
+    [`xai-${FAKE_ALNUM}${'0'.repeat(20)}`, 'xai-key'],
+    [`dp.pt.${FAKE}`, 'doppler-token'],
   ];
   for (const [secret, kind] of cases) {
     const { text, counts } = redact(`export VALUE=${secret}`);
@@ -166,11 +186,11 @@ test('ordinary high-entropy output is never redacted', () => {
 });
 
 test('truncation happens after redaction so no secret survives at the cut', () => {
-  const secret = 'ghp_0123456789abcdefghijklmnopqrstuvwx';
+  const secret = `ghp_${FAKE_ALNUM}${'0'.repeat(16)}`;
   const padded = `${'x'.repeat(500)}${secret}${'y'.repeat(500)}`;
   const { text, truncated } = redactAndTruncate(padded, 200);
   assert.equal(truncated, true);
-  assert.doesNotMatch(text, /ghp_0123/);
+  assert.doesNotMatch(text, new RegExp(FAKE_ALNUM));
 });
 
 /*
