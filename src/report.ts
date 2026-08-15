@@ -13,7 +13,15 @@
  */
 
 import { escape, html, jsonScriptPayload, trusted, type Html } from './html.ts';
-import { badge, groupBranches, type BranchRow, type Finding, type SessionReport, type Verdict } from './reconcile.ts';
+import {
+  badge,
+  groupBranches,
+  RISK_ORDER,
+  type BranchRow,
+  type Finding,
+  type SessionReport,
+  type Verdict,
+} from './reconcile.ts';
 
 export interface ReportMeta {
   repo: string;
@@ -26,7 +34,10 @@ export interface ReportMeta {
 const VERDICT_COPY: Record<Verdict, { mark: string; note: string }> = {
   CONTRADICTED: { mark: '✕', note: 'The agent claimed success. The run it refers to failed.' },
   UNSUPPORTED: { mark: '!', note: 'The agent claimed it. No such command was ever run.' },
-  UNKNOWN: { mark: '?', note: 'Not determinable from the transcript. Reported, never guessed.' },
+  // An en dash, not a question mark. Abstention is a deliberate, correct outcome
+  // and must not wear the glyph of an error; `?` read as "something went wrong"
+  // on the ten of eleven branches where the honest answer is "nothing to report".
+  UNKNOWN: { mark: '–', note: 'Not determinable from the transcript. Reported, never guessed.' },
   VERIFIED: { mark: '✓', note: 'Backed by an observed run that succeeded.' },
 };
 
@@ -54,10 +65,13 @@ const CSS = String.raw`
 @layer base {
   :root {
     color-scheme: dark light;
-
     --ink:        light-dark(#16181c, #e9e6e1);
     --ink-dim:    light-dark(#5c5f66, #97948e);
-    --ink-faint:  light-dark(#8a8d94, #6a6862);
+    /* Pinned to >=4.5:1 against its own background. This carries 10.5-11.5px
+       labels, which WCAG counts as normal text, so the 3:1 large-text allowance
+       does not apply. Measured, not guessed: the previous pair sat at 3.49
+       (dark) and 3.08 (light), and both failed AA. */
+    --ink-faint:  light-dark(#6e7178, #828079);
     --bg:         light-dark(#f7f6f4, #0c0d0f);
     --panel:      light-dark(#ffffff, #131417);
     --panel-2:    light-dark(#f1efec, #191a1e);
@@ -189,33 +203,130 @@ const CSS = String.raw`
     font-size: 14px;
   }
 
-  /* ---- tally ---------------------------------------------------------- */
-  .tally {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1px;
-    background: var(--rule);
-    border: 1px solid var(--rule);
-    margin-bottom: var(--s6);
-  }
-  .tally div {
-    flex: 1 1 120px;
+  /* ---- lead: the one finding the report exists to show ------------------
+     Extracted from the list entirely, the way Vercel hoists a build error out
+     of the log. A reader who does nothing but look at this card has still got
+     the answer. */
+  .lead {
+    border: 1px solid var(--contradicted);
+    border-left-width: 3px;
     background: var(--panel);
-    padding: var(--s3) var(--s4);
+    padding: var(--s4) var(--s5);
+    margin-bottom: var(--s5);
+    --accent: var(--contradicted);
   }
-  .tally dt {
+  .lead-head {
+    display: flex;
+    align-items: baseline;
+    gap: var(--s3);
+    flex-wrap: wrap;
+    margin-bottom: var(--s2);
+  }
+  .lead-branch {
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+  .lead-reason {
+    font-size: 15px;
+    margin-bottom: var(--s4);
+  }
+
+  /* ---- verdict chips ----------------------------------------------------
+     The count and the filter are the same control. A tally that only reports
+     is a wall of numbers; Playwright's chips let the summary *do* something. */
+  .chips { display: flex; gap: var(--s1); flex-wrap: wrap; }
+  .chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 6px var(--s2) 6px 7px;
+    border: 1px solid var(--rule-firm);
+    background: var(--panel);
+    cursor: pointer;
+    font-size: 11.5px;
+    letter-spacing: 0.04em;
+    color: var(--ink-dim);
+    transition: border-color 140ms ease, color 140ms ease;
+  }
+  .chip:hover:not(:disabled) { color: var(--ink); border-color: var(--ink-faint); }
+  .chip:disabled { opacity: 0.4; cursor: default; }
+  .chip-mark { color: var(--accent); font-weight: 700; }
+  .chip-count {
+    font-variant-numeric: tabular-nums lining-nums;
+    font-weight: 600;
+    color: var(--ink);
+  }
+  .chip[aria-pressed="true"] {
+    border-color: var(--accent);
+    color: var(--ink);
+    box-shadow: inset 0 -2px 0 var(--accent);
+  }
+
+  /* ---- buckets: collapse the majority that needs no action -------------- */
+  .bucket {
+    border: 1px solid var(--rule);
+    background: var(--panel);
+    margin-bottom: var(--s3);
+  }
+  .bucket > summary {
+    display: flex;
+    align-items: baseline;
+    gap: var(--s2);
+    flex-wrap: wrap;
+    padding: var(--s3) var(--s4);
+    cursor: pointer;
+    list-style: none;
+    color: var(--ink-dim);
+  }
+  .bucket > summary::-webkit-details-marker { display: none; }
+  .bucket > summary:hover { background: var(--panel-2); }
+  .bucket > summary b { color: var(--ink); font-weight: 600; }
+  .bucket-mark { color: var(--accent); font-weight: 700; }
+  .bucket-hint { color: var(--ink-faint); font-size: 11.5px; }
+  .bucket > summary::after {
+    content: "show";
+    margin-left: auto;
     font-size: 10.5px;
     letter-spacing: 0.16em;
     text-transform: uppercase;
     color: var(--ink-faint);
   }
-  .tally dd {
-    font-size: 26px;
-    line-height: 1.1;
-    margin-top: 2px;
-    font-variant-numeric: tabular-nums lining-nums;
+  .bucket[open] > summary::after { content: "hide"; }
+  .bucket .rows { padding: 0 var(--s3) var(--s3); }
+
+  /* ---- finding head ----------------------------------------------------- */
+  .finding-head {
+    display: flex;
+    align-items: baseline;
+    gap: var(--s2);
+    flex-wrap: wrap;
   }
-  .tally dd.hot { color: var(--accent); }
+  .scope {
+    font-size: 10.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  .pill {
+    border: 1px solid var(--rule-firm);
+    padding: 1px 6px;
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+  }
+  .session-meta {
+    display: flex;
+    gap: var(--s3);
+    flex-wrap: wrap;
+    align-items: baseline;
+    padding: var(--s2) 0 var(--s3);
+    border-bottom: 1px dashed var(--rule);
+    margin-bottom: var(--s4);
+    font-size: 11.5px;
+    color: var(--ink-faint);
+  }
+  .quiet { color: var(--ink-faint); padding: var(--s2) 0; }
 
   /* ---- controls ------------------------------------------------------- */
   .controls {
@@ -350,15 +461,46 @@ const CSS = String.raw`
 
   /* Evidence: what actually ran. Monospace, boxed, machine-flavoured. */
   .evidence {
+    position: relative;
     margin-top: var(--s3);
     border: 1px solid var(--rule);
     background: var(--panel-2);
   }
+  .copy {
+    position: absolute;
+    top: var(--s1);
+    right: var(--s1);
+    padding: 2px 7px;
+    border: 1px solid var(--rule-firm);
+    background: var(--panel);
+    color: var(--ink-faint);
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 140ms ease, color 140ms ease;
+  }
+  /* Revealed on hover or keyboard focus — never hidden from the keyboard, which
+     is what display:none-until-hover would do. */
+  .evidence:hover .copy, .copy:focus-visible { opacity: 1; }
+  .copy:hover { color: var(--ink); }
   .evidence .cmd {
+    margin: 0;
     padding: var(--s2) var(--s3);
-    overflow-x: auto;
-    white-space: pre;
+    font-family: var(--mono);
     font-size: 12.5px;
+    /* Wrap, never clip. A command scrolled off the right edge is a command the
+       reader cannot check, and the end of a pipeline is usually the part that
+       decides the verdict. Continuation is indented so wrapped lines read as
+       one command rather than several. */
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    text-indent: -2ch;
+    padding-left: calc(var(--s3) + 2ch);
+    max-height: 12lh;
+    overflow-y: auto;
   }
   .evidence .outcome {
     display: flex;
@@ -438,29 +580,47 @@ const CSS = String.raw`
 const JS = String.raw`
 (function () {
   var rows = Array.prototype.slice.call(document.querySelectorAll('.row'));
+  var chips = Array.prototype.slice.call(document.querySelectorAll('.chip'));
+  var buckets = Array.prototype.slice.call(document.querySelectorAll('.bucket'));
   var search = document.getElementById('q');
-  var only = document.getElementById('only');
   var count = document.getElementById('shown');
+  if (!search || !count) return;
+
+  function selected() {
+    return chips.filter(function (c) { return c.getAttribute('aria-pressed') === 'true'; })
+                .map(function (c) { return c.dataset.verdict; });
+  }
 
   function apply() {
     var needle = search.value.trim().toLowerCase();
-    var attentionOnly = only.getAttribute('aria-pressed') === 'true';
+    var want = selected();
     var shown = 0;
     rows.forEach(function (row) {
       var matchesText = needle === '' || row.dataset.search.indexOf(needle) !== -1;
-      var matchesFilter = !attentionOnly || row.dataset.attention === '1';
-      var visible = matchesText && matchesFilter;
+      var matchesVerdict = want.length === 0 || want.some(function (v) {
+        return (' ' + row.dataset.verdicts + ' ').indexOf(' ' + v + ' ') !== -1;
+      });
+      var visible = matchesText && matchesVerdict;
       row.hidden = !visible;
       if (visible) shown++;
+    });
+    // A bucket whose every row is filtered out is noise; hide it, and open it
+    // when a filter is active so matches inside are not hidden behind a click.
+    buckets.forEach(function (b) {
+      var live = Array.prototype.slice.call(b.querySelectorAll('.row')).filter(function (r) { return !r.hidden; });
+      b.hidden = live.length === 0;
+      if ((needle !== '' || want.length > 0) && live.length > 0) b.open = true;
     });
     count.textContent = String(shown);
   }
 
-  search.addEventListener('input', apply);
-  only.addEventListener('click', function () {
-    only.setAttribute('aria-pressed', only.getAttribute('aria-pressed') === 'true' ? 'false' : 'true');
-    apply();
+  chips.forEach(function (chip) {
+    chip.addEventListener('click', function () {
+      chip.setAttribute('aria-pressed', chip.getAttribute('aria-pressed') === 'true' ? 'false' : 'true');
+      apply();
+    });
   });
+  search.addEventListener('input', apply);
 
   document.addEventListener('keydown', function (e) {
     if (e.target === search) {
@@ -474,6 +634,26 @@ const JS = String.raw`
     }
   });
 
+  /* Copy buttons are added here rather than rendered into the markup, so a
+     reader with JavaScript disabled never meets a button that cannot work. */
+  if (navigator.clipboard) {
+    Array.prototype.slice.call(document.querySelectorAll('.evidence')).forEach(function (box) {
+      var cmd = box.querySelector('.cmd');
+      if (!cmd) return;
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'copy';
+      b.textContent = 'copy';
+      b.addEventListener('click', function () {
+        navigator.clipboard.writeText(cmd.textContent || '').then(function () {
+          b.textContent = 'copied';
+          setTimeout(function () { b.textContent = 'copy'; }, 1200);
+        });
+      });
+      box.appendChild(b);
+    });
+  }
+
   apply();
 })();
 `;
@@ -482,15 +662,53 @@ function fmt(n: number): string {
   return n.toLocaleString('en-US');
 }
 
+/**
+ * The findings a reader should actually see: worst first, duplicates collapsed.
+ *
+ * One sentence routinely produces several findings. "lint clean, 27 tests pass"
+ * is a claim about lint *and* about tests, and the engine is right to judge each
+ * separately — but a reader then meets the same sentence and the same command
+ * three times in a row. Identical (verdict, sentence, evidence) triples collapse
+ * into one card that names every activity it covers.
+ */
+interface Grouped {
+  finding: Finding;
+  activities: string[];
+}
+
+function digest(findings: readonly Finding[]): Grouped[] {
+  const byKey = new Map<string, Grouped>();
+  for (const finding of findings) {
+    const key = [finding.verdict, finding.claim.sentence, finding.evidence.map((e) => e.command).join('\u0001')].join('\u0000');
+    const seen = byKey.get(key);
+    if (seen === undefined) byKey.set(key, { finding, activities: [finding.claim.activity] });
+    else if (!seen.activities.includes(finding.claim.activity)) seen.activities.push(finding.claim.activity);
+  }
+  // Worst first. A reader who opens a CONTRADICTED branch must not have to
+  // scroll past thirty verified claims to reach the one that made them open it.
+  return [...byKey.values()].sort((a, b) => RISK_ORDER[a.finding.verdict] - RISK_ORDER[b.finding.verdict]);
+}
+
+/** The single finding the whole report is about, hoisted out of the list. */
+function headlineFinding(rows: readonly BranchRow[]): { row: BranchRow; finding: Finding } | undefined {
+  for (const row of rows) {
+    if (!row.needsAttention) continue;
+    const all = row.reports.flatMap((r) => r.findings);
+    const worst = digest(all)[0];
+    if (worst !== undefined) return { row, finding: worst.finding };
+  }
+  return undefined;
+}
+
 function evidenceBlock(finding: Finding): Html {
   if (finding.evidence.length === 0) return html``;
   return html`
         <p class="label">Observed</p>
         ${finding.evidence.slice(0, 3).map(
           (run) => html`<div class="evidence">
-          <div class="cmd">${run.command}</div>
+          <pre class="cmd"><code>${run.command}</code></pre>
           <div class="outcome">
-            <span><b>${run.activity}</b></span>
+            <span class="pill">${run.activity}</span>
             <span>outcome <b>${run.outcome}</b></span>
             <span>basis <b>${run.basis}</b></span>
             ${run.exitCode === null ? html`<span>exit <b>n/a</b></span>` : html`<span>exit <b>${run.exitCode}</b></span>`}
@@ -499,11 +717,16 @@ function evidenceBlock(finding: Finding): Html {
         )}`;
 }
 
-function findingBlock(finding: Finding): Html {
+function findingBlock({ finding, activities }: Grouped): Html {
   const copy = VERDICT_COPY[finding.verdict];
   return html`
-      <article class="finding" style="--accent: var(--${finding.verdict.toLowerCase()})">
-        <span class="tag">${copy.mark}&nbsp;${finding.verdict}</span>
+      <article class="finding" data-verdict="${finding.verdict}" style="--accent: var(--${finding.verdict.toLowerCase()})">
+        <div class="finding-head">
+          <span class="tag">${copy.mark}&nbsp;${finding.verdict}</span>
+          ${activities.length > 1
+            ? html`<span class="scope">covers ${activities.join(' · ')}</span>`
+            : html`<span class="scope">${activities[0] ?? ''}</span>`}
+        </div>
         <p class="reason">${finding.reason}</p>
         <p class="label">Claimed</p>
         <blockquote class="testimony">${finding.claim.sentence}</blockquote>
@@ -513,35 +736,42 @@ function findingBlock(finding: Finding): Html {
 
 function sessionBlock(report: SessionReport): Html {
   const { session } = report;
-  const b = badge(report);
+  const grouped = digest(report.findings);
   return html`
-      <div class="finding" style="--accent: var(--${b.verdict.toLowerCase()})">
-        <span class="tag">session ${session.id.slice(0, 8)}</span>
-        <p class="reason">
-          ${fmt(session.execs.length)} shell invocations · ${fmt(report.runs.length)} classified runs ·
-          ${fmt(session.edits.length)} file edits · ${fmt(session.usage.inputTokens + session.usage.outputTokens)} tokens
-          ${session.models.length === 0 ? '' : ` · ${session.models.join(', ')}`}
-        </p>
+      <div class="session-meta">
+        <span class="pill">session ${session.id.slice(0, 8)}</span>
+        <span>${fmt(session.execs.length)} shell invocations</span>
+        <span>${fmt(report.runs.length)} classified runs</span>
+        <span>${fmt(session.edits.length)} file edits</span>
+        ${session.models.length === 0 ? '' : html`<span>${session.models.join(', ')}</span>`}
       </div>
-      ${report.findings.map(findingBlock)}`;
+      ${grouped.map(findingBlock)}`;
 }
 
 function branchRow(row: BranchRow): Html {
   const copy = VERDICT_COPY[row.verdict];
   const haystack = `${row.label} ${row.summary} ${row.verdict}`.toLowerCase();
   const findings = row.reports.reduce((n, r) => n + r.findings.length, 0);
+  /*
+   * Every verdict present in the branch, not just its worst. The chips count
+   * *claims*, so a chip reading "verified 84" must match the branches those 84
+   * claims live in — matching on worst-verdict alone would have made that chip
+   * select nothing at all, which is the same lie the old "Verified 0" tally told.
+   */
+  const present = [...new Set(row.reports.flatMap((r) => r.findings.map((f) => f.verdict)))];
   return html`
-    <details class="row" style="--accent: var(--${row.verdict.toLowerCase()})"
+    <details class="row" data-verdicts="${[row.verdict, ...present].join(' ')}"
+      style="--accent: var(--${row.verdict.toLowerCase()})"
       data-search="${haystack}" data-attention="${row.needsAttention ? '1' : '0'}">
       <summary>
         <span class="mark" aria-hidden="true">${copy.mark}</span>
-        <span class="branch">${row.label}<span class="sr-only"> — ${row.verdict}</span></span>
+        <span class="branch" title="${row.label}">${row.label}<span class="sr-only"> — ${row.verdict}</span></span>
         <span class="summary-text">${row.summary}</span>
-        <span class="facts">${fmt(row.execs)} cmd · ${fmt(row.edits)} edit · ${fmt(row.tokens)} tok</span>
+        <span class="facts">${fmt(row.execs)} cmd · ${fmt(row.edits)} edit</span>
       </summary>
       <div class="findings">
         ${findings === 0
-          ? html`<p class="reason" style="color: var(--ink-faint)">No execution claims were made in this branch's sessions.</p>`
+          ? html`<p class="quiet">This branch's sessions made no execution claims, so there is nothing to verify.</p>`
           : row.reports.map(sessionBlock)}
       </div>
     </details>`;
@@ -565,6 +795,19 @@ export function renderReport(reports: SessionReport[], meta: ReportMeta): string
     verified: findings.filter((f) => f.verdict === 'VERIFIED').length,
   };
   const worst = rows[0]?.verdict ?? 'VERIFIED';
+
+  /*
+   * Buckets, not one flat list. On a real corpus 10 of 11 branches are UNKNOWN —
+   * nothing a reader can act on — and a flat list buries the single branch that
+   * matters under ten that do not. Lighthouse and GitHub both solve this by
+   * collapsing the uninteresting majority behind a disclosure with a count.
+   */
+  const settled = rows.filter((r) => !r.needsAttention);
+  const verifiedRows = settled.filter((r) => r.verdict === 'VERIFIED');
+  const quietRows = settled.filter((r) => r.verdict !== 'VERIFIED');
+
+  // The one finding the report exists to show, lifted out of the list entirely.
+  const lead = headlineFinding(rows);
 
   const headline =
     attention.length === 0
@@ -604,29 +847,61 @@ export function renderReport(reports: SessionReport[], meta: ReportMeta): string
 
   <section class="verdict-head">${headline}</section>
 
-  <dl class="tally">
-    <div><dt>Branches</dt><dd>${fmt(tally.branches)}</dd></div>
-    <div><dt>Claims made</dt><dd>${fmt(tally.claims)}</dd></div>
-    <div><dt>Contradicted</dt><dd class="${tally.contradicted > 0 ? 'hot' : ''}"
-      style="--accent: var(--contradicted)">${fmt(tally.contradicted)}</dd></div>
-    <div><dt>Unsupported</dt><dd class="${tally.unsupported > 0 ? 'hot' : ''}"
-      style="--accent: var(--unsupported)">${fmt(tally.unsupported)}</dd></div>
-    <div><dt>Unverifiable</dt><dd>${fmt(tally.unknown)}</dd></div>
-    <div><dt>Verified</dt><dd style="--accent: var(--verified)"
-      class="${tally.verified > 0 ? 'hot' : ''}">${fmt(tally.verified)}</dd></div>
-  </dl>
+  ${lead === undefined
+    ? html``
+    : html`<section class="lead" aria-label="The finding to read first">
+        <div class="lead-head">
+          <span class="tag">${VERDICT_COPY[lead.finding.verdict].mark}&nbsp;${lead.finding.verdict}</span>
+          <span class="lead-branch">${lead.row.label}</span>
+        </div>
+        <p class="lead-reason">${lead.finding.reason}</p>
+        <p class="label">The agent wrote</p>
+        <blockquote class="testimony">${lead.finding.claim.sentence}</blockquote>
+        ${evidenceBlock(lead.finding)}
+      </section>`}
 
   <div class="controls">
     <input id="q" type="search" placeholder="Filter branches…  (press /)" aria-label="Filter branches">
-    <button id="only" type="button" aria-pressed="false">Needs attention</button>
-    <span class="facts"><span id="shown">${fmt(rows.length)}</span> shown</span>
+    <div class="chips" role="group" aria-label="Filter by verdict">
+      ${VERDICT_ORDER.map((v) => {
+        const n = findings.filter((f) => f.verdict === v).length;
+        return html`<button class="chip" type="button" data-verdict="${v}" aria-pressed="false"
+          style="--accent: var(--${v.toLowerCase()})" ${n === 0 ? trusted('disabled') : ''}>
+          <span class="chip-mark" aria-hidden="true">${VERDICT_COPY[v].mark}</span>
+          <span class="chip-label">${v.toLowerCase()}</span>
+          <span class="chip-count">${fmt(n)}</span>
+        </button>`;
+      })}
+    </div>
+    <span class="facts"><span id="shown">${fmt(rows.length)}</span> of ${fmt(rows.length)} branches</span>
   </div>
 
-  <div class="rows">
-    ${rows.length === 0
-      ? html`<p class="empty">No agent sessions were found for this repository.</p>`
-      : rows.map(branchRow)}
+  <div class="rows" id="rows">
+    ${rows.length === 0 ? html`<p class="empty">No agent sessions were found for this repository.</p>` : ''}
+    ${attention.map(branchRow)}
   </div>
+
+  ${verifiedRows.length === 0
+    ? html``
+    : html`<details class="bucket">
+        <summary>
+          <span class="bucket-mark" style="--accent: var(--verified)">${VERDICT_COPY['VERIFIED'].mark}</span>
+          <b>${fmt(verifiedRows.length)}</b> ${verifiedRows.length === 1 ? 'branch is' : 'branches are'} fully verified
+          <span class="bucket-hint">every claim backed by an observed run</span>
+        </summary>
+        <div class="rows">${verifiedRows.map(branchRow)}</div>
+      </details>`}
+
+  ${quietRows.length === 0
+    ? html``
+    : html`<details class="bucket">
+        <summary>
+          <span class="bucket-mark" style="--accent: var(--unknown)">${VERDICT_COPY['UNKNOWN'].mark}</span>
+          <b>${fmt(quietRows.length)}</b> ${quietRows.length === 1 ? 'branch' : 'branches'} made no verifiable claim
+          <span class="bucket-hint">nothing was asserted, or the transcript cannot settle it</span>
+        </summary>
+        <div class="rows">${quietRows.map(branchRow)}</div>
+      </details>`}
 
   <div class="legend">
     ${VERDICT_ORDER.map(
