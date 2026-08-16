@@ -6,10 +6,10 @@
 | | |
 |---|---|
 | **Project** | `land` (renamed from ArchTerminal — `ADR-016` accepted) |
-| **Tracker version** | 1.3.0 |
-| **Last updated** | 2026-08-13T04:10:00Z |
-| **Phase** | **M1 — Evidence** (shipped, audited; HTML report + readable evidence store) |
-| **Lines of product code** | **3,265** src · **750** test (44 tests) |
+| **Tracker version** | 1.4.0 |
+| **Last updated** | 2026-08-15T09:20:00Z |
+| **Phase** | **M1 — Evidence** (shipped, audited; report + readable store + CI gate) |
+| **Lines of product code** | **3,886** src · **938** test (52 tests) |
 | **Version control** | ✅ git, `DEBT-007` closed |
 | **Documents** | `README.md`, `ArchTerminal-Research.md`, `ArchTerminal-Review.md`, `PROJECT_TRACKER.md` |
 
@@ -127,8 +127,8 @@ Gate A: *the badge fires correctly across 10 real sessions, with zero false accu
 | True positive | An agent wrote *"Lint clean, 27 tests pass"* while `ruff` printed `Found 1 error.` The test half was true; the lint half was not. |
 | Evidence store | 2,336 events, hash chain verifies; tamper detected at the mutated row with exit 2 |
 | Secrets redacted at write time | 83, including a live Upstash Redis REST token |
-| Tests | **44**, all passing; `tsc --noEmit` clean |
-| Surfaces | terminal · self-contained HTML report · `--json` — all three from one `groupBranches` code path, asserted in tests |
+| Tests | **52**, all passing; `tsc --noEmit` clean |
+| Surfaces | terminal · HTML report · `--json` · CI gate — all from one `groupBranches` code path, asserted in tests |
 
 **Two false accusations were found and fixed during the run**, both from treating the word "check" as test vocabulary (*"the no-duplicate-names check already passed"*, *"its gradient check passing < 1e-5"*). Both are recorded as regression comments in `src/claims.ts`. A third defect was worse than a false accusation and is recorded in `src/reconcile.ts`: a user-**denied** `npm test` was being admitted as evidence *supporting* a claim that tests passed.
 
@@ -188,7 +188,7 @@ Gate A: *the badge fires correctly across 10 real sessions, with zero false accu
 | `F-029` | in-toto / SLSA attestation export | ⬜ Planned | Unassigned | P2 | `F-012`,`ADR-011` |
 | `F-030` | Shareable evidence bundle — **artifact shipped as `land ui`** (`F-017b`); the *URL* half still needs `F-029` | 🟡 Partial | AI | P2 | `F-029`,`F-011` |
 | `F-031` | Publish benchmark + our score *including failures* | ⬜ Planned | Unassigned | P2 | `F-020`,`F-024` |
-| `F-032` | GitHub Action / CI mode | ⬜ Planned | Unassigned | P2 | `F-024` |
+| `F-032` | GitHub Action / CI mode (`land ci`, composite `action.yml`) | ✅ Done | AI | P2 | `DEBT-015` |
 | `F-033` | **Merge-queue integration + CI-minutes-saved metric** 💰 | ⬜ Planned | Unassigned | P2 | `F-032` |
 | `F-034` | Adapters: Codex CLI, cmux socket, amux REST | ⬜ Planned | Unassigned | P2 | `F-010`,`F-016` |
 
@@ -261,7 +261,7 @@ Gate A: *the badge fires correctly across 10 real sessions, with zero false accu
 | `ADR-019` | **$0 OSS core → $20/user/mo Team** | 💭 **Proposed** | Original $40–60 anchors above the whole adjacent category (Graphite $15–30, CodeRabbit $15) pre-value. Land in the existing merge-queue budget line. |
 | `ADR-020` | **Pre-index on worktree creation, not on invocation** | ✅ | Still right, but cheaper than assumed: CodeGraph already caches per-file extractions by content hash + transitive import closure, so an N-branch matrix is not N full passes. |
 | `ADR-021` | **Analysis is isolation-model-agnostic** | ✅ | Worktrees are the common case; containers (Sculptor) and cloud VMs must work too. Cheap to preserve, denies competitors a differentiator. |
-| `ADR-022` | **TypeScript on Node ≥22.6 for the whole engine — not Rust** | ✅ **Accepted 2026-08-13**, supersedes `ADR-004` | `ADR-004` was decided when CodeGraph was an unverified claim. It is real, MIT, TypeScript, and already does symbol-level cross-revision analysis on uncompilable code. A Rust engine means reimplementing the one asset that already works — the same category of error as `ADR-001`. Node 25 also removes the dependency argument: `node:sqlite`, `node:test` and native TS execution ship with the runtime, so the evidence engine has **zero runtime dependencies**. Cost: no single static binary today (`bun build --compile` or Node SEA when distribution demands it). |
+| `ADR-022` | **TypeScript on Node ≥24 for the whole engine — not Rust** | ✅ **Accepted 2026-08-13**, supersedes `ADR-004` | `ADR-004` was decided when CodeGraph was an unverified claim. It is real, MIT, TypeScript, and already does symbol-level cross-revision analysis on uncompilable code. A Rust engine means reimplementing the one asset that already works — the same category of error as `ADR-001`. Node 25 also removes the dependency argument: `node:sqlite`, `node:test` and native TS execution ship with the runtime, so the evidence engine has **zero runtime dependencies**. Cost: no single static binary today (`bun build --compile` or Node SEA when distribution demands it). **Corrected 2026-08-16:** the floor was documented as 22.6 and was false — unflagged type stripping arrived in 23.6 and stable `node:sqlite` in 24, so every `.ts` entrypoint failed with `ERR_UNKNOWN_FILE_EXTENSION` below 24. Caught by CI on its first run (`DEBT-028`). |
 | `ADR-023` | **Symbol indexing via CodeGraph (tree-sitter + TS compiler API) — not SCIP** | ✅ **Accepted 2026-08-13**, supersedes `ADR-007` | SCIP indexers generally need a resolvable build; an agent worktree usually has neither `node_modules` nor a clean compile, which is **the normal state of the artifact we analyse** — and per Review §5.2 that is precisely the structural weakness we exploit against Moderne. Adopting SCIP would have imported the competitor's constraint. CodeGraph parses degraded trees and falls back to syntactic heuristics. Keep SCIP as a possible *export* format, never as the ingestion path. |
 | `ADR-024` | **Abstain rather than accuse, in four named verdicts** | ✅ **Accepted 2026-08-13** | Implements `ADR-010` for the evidence primitive. `UNSUPPORTED`/`CONTRADICTED` require every escape route closed: shell access demonstrably used, no matching command anywhere, no user-denied command, and no opaque code-executing tool in the session. Otherwise `UNKNOWN`, stated plainly. Validated at 0 false accusations over 18 real sessions. |
 | `ADR-025` | **Store observations, derive verdicts** | ✅ **Accepted 2026-08-13** | Only observations enter the hash chain. Verdicts are recomputed on read, so an opinion can never drift from the evidence it describes, and improving the reconciler never invalidates stored history. Tamper-evidence belongs on the source, not on a conclusion about it. |
@@ -270,6 +270,9 @@ Gate A: *the badge fires correctly across 10 real sessions, with zero false accu
 | `ADR-028` | **Aesthetic direction: forensic instrument. Testimony in serif, evidence in monospace.** | ✅ **Accepted 2026-08-13** | The `ui-ux-pro-max` database recommended "Modern Dark (Cinema Mobile)" — glassmorphism, blur, indigo glow, Inter via Google Fonts CDN. Rejected: the CDN import breaks self-containment (`ADR-026`), and blur/glow is a mobile-media aesthetic on a document whose job is to look like a *record*. **Its structural rules were kept**: dark primary, dense spacing scale, no pure `#000`, AA contrast on accents, visible focus, `prefers-reduced-motion`, SVG not emoji. The direction instead: near-monochrome, hairline rules, tabular numerals, one saturated colour on screen at a time (the verdict). The organising idea is a court exhibit — what the agent *said* is set in serif, what was *observed* is set in monospace, so the two are never visually confusable. Type comes from system stacks only, per `ADR-026`. |
 | `ADR-029` | **A growing transcript is appended to the chain, never refused** | ✅ **Accepted 2026-08-13** | Agents write to a transcript *while they work*, so any ingest during a run captures a prefix. The prior rule ("a changed transcript must be recorded as a new session id or not at all") sounded principled and was actively dangerous: it froze mid-run sessions forever, so a store could `VERIFIED` an agent that a live parse `CONTRADICTED` (`DEBT-027`). Appending is the correct reading of an append-only log — a longer session is *more observations*, not rewritten ones. Only `seq` values beyond the stored high-water mark are added, so existing events and every hash over them stay byte-identical. Corollary: `events` is append-only by trigger, while the session row beside it is metadata (token totals, end time) that legitimately moves; rewriting a token count cannot alter what the chain says happened. |
 | `ADR-030` | **Two read sources, chosen explicitly by `--store`; never inferred** | ✅ **Accepted 2026-08-13** | `queue`/`evidence`/`ui` parse local transcripts by default and read the evidence store when `--store` is typed. The rejected alternative — "read the store when one exists" — silently changes a command's data source the moment someone runs `ingest`, which is exactly the kind of invisible state a forensic tool must not have. An explicit path is also the honest signal for the cases that *only* the store can serve: a session from another machine, a transcript the agent has rotated away, and CI, where transcripts never exist. Verdicts are recomputed from stored observations on every read (`ADR-025`), so both sources agree — verified at 18/18 identical on the real corpus. |
+| `ADR-031` | **The CI gate is a policy, and the default is the narrowest one** | ✅ **Accepted 2026-08-15** | `--fail-on` defaults to `contradicted`: the only verdict meaning an agent's summary was demonstrably wrong. Failing on `UNKNOWN` by default would make the tool unadoptable, because most real sessions are legitimately unverifiable (`LIM-003`), and a gate that fires constantly gets disabled in week one. Policies are strict supersets — an `UNSUPPORTED` claim is a *stronger* accusation than a `CONTRADICTED` one, not a weaker one — and that ordering is asserted in tests rather than left to the reader. A mistyped `--fail-on` exits 64 rather than falling back to the default: a gate that silently stops gating is worse than no gate, because the green check becomes a lie the whole pipeline trusts. A broken evidence chain exits 2 and outranks *every* policy including `never`, since tampered evidence is not a policy question. |
+| `ADR-032` | **Composite Action, not a JavaScript Action; no `@actions/core`** | ✅ **Accepted 2026-08-15** | A JS action must ship a bundled `dist/` produced by `ncc`, which means committing generated code and asking a reviewer to trust a blob — an unreasonable ask from a tool whose entire proposition is verifiable evidence. A composite action runs the source directly on the runner's Node, so what runs is what was reviewed. `@actions/core` was rejected for the same reason `ADR-022` keeps the dependency count at zero: it exists to hide three plain-text protocols (log commands, a summary file, an outputs file) that total ~60 lines here, and it would be the project's first runtime dependency, in the component with the widest blast radius. |
+| `ADR-033` | **`land` stays a separate tool; CodeGraph is consumed as a library, never a host** | ✅ **Accepted 2026-08-15** | Audited (`EvalCodeGraphFit`). Absorbing `land` into CodeGraph rates **2/10**; keeping it separate and consuming `packages/core-graph` for M3 rates **9/10**. CodeGraph is mature (120 test files, 2,206 cases, CI green, MIT) and `core-graph` is genuinely importable without the Next.js app — which is exactly why it works as a *library*. But absorption would force `land` to inherit ~30 workspace dependencies, the `web-tree-sitter` WASM arena leak and its child-process mitigation, a Docker-deployed worker, and CodeGraph's release cadence. That destroys the three constraints `land` is actually sold on: zero runtime dependencies, no server, and a single auditable file a reviewer can trust. A forensic auditor must be lighter and more boring than the thing it audits. `ADR-023` already had the right shape: use the engine, do not move into it. |
 
 ---
 
@@ -308,6 +311,7 @@ Documentation debt from the review is now closed. New entries below it are **cod
 | `DEBT-025` | **`land queue --json` reported sessions under a key named `branches`** — 18 rows against the terminal's 11 for identical input | 🟠 | ✅ **Fixed 2026-08-13** | `src/cli.ts` | Consumes `groupBranches`; invariant asserted in tests |
 | `DEBT-026` | **`--json` always exited 0**, so the CI gate the README promises did not exist: piping to a machine consumer silently disabled the signal | 🔴 | ✅ **Fixed 2026-08-13** | `src/cli.ts` | Exit code is now format-independent |
 | `DEBT-027` | **🔴 A session ingested mid-run was frozen at that moment, permanently.** Agents append to a transcript *while they work*, so `ingest` during a run stored a prefix; treating a known session id as a no-op then discarded every later event forever. **A store ingested during a run would `VERIFIED`/exonerate an agent that a live parse `CONTRADICTED`** — the lie simply arrived after the snapshot. Reproduced: store held 3 events and missed a contradicted lint claim entirely | 🔴 | ✅ **Fixed 2026-08-13** | `src/store.ts` | `ingest` appends events beyond the stored high-water mark; existing events and hashes stay byte-identical. Regression test confirmed to fail against the old behaviour |
+| `DEBT-028` | **The declared Node floor was false.** `engines` said `>=22.6.0`, the README repeated it, and `ADR-022` cited it — but unflagged TypeScript stripping arrived in 23.6 and stable `node:sqlite` in 24, so on 22.6 every `.ts` entrypoint died with `ERR_UNKNOWN_FILE_EXTENSION` and all four test files failed. Nobody noticed because every run happened on Node 25 | 🟠 | ✅ **Fixed 2026-08-16** | `package.json`, `README.md`, `ADR-022` | Floor corrected to `>=24.0.0`; CI matrix pins the floor **and** `lts/*` so the field cannot drift from reality again. Caught by CI on its first run — which is the argument for having it |
 
 ---
 
@@ -320,7 +324,7 @@ Documentation debt from the review is now closed. New entries below it are **cod
 | `LIM-003` | **Precision target caps recall at ~60–76%** | We will miss real conflicts | Deliberate. `UNKNOWN` tier must be visible, never silent |
 | `LIM-004` | **3 languages only** (TS → Py → Rust) | Other stacks get `UNKNOWN` | `ADR-015`; never a silent false negative |
 | `LIM-005` | **Transcript coverage depends on the agent emitting structured logs** | Non-emitting agents degrade to PTY fallback | `F-018` |
-| `LIM-006` | **No CI surface yet** — the *store* is now portable and readable off-machine (`DEBT-015`), so the blocker is packaging, not architecture | The buyer (eng manager) lives in CI | `F-032`, now unblocked |
+| `LIM-006` | ~~No CI surface~~ — `land ci` ships a composite Action; the gate runs where transcripts do not exist | Reaches the buyer (eng manager), who lives in CI | ✅ Closed by `F-032` |
 | `LIM-007` | **No monorepo support until v2** | Weakest exactly where agents are most useful | `F-046` |
 | `LIM-008` | **Detection without resolution** — we flag and hold, we don't fix | Half a product for the held branch | `F-045` |
 | `LIM-009` | **Cold start** — full value needs ≥3 parallel agents, a small population today | Slow early adoption | `ADR-009` — evidence works for a single agent |
@@ -336,7 +340,7 @@ Documentation debt from the review is now closed. New entries below it are **cod
 1. 🔴 **`F-020` — the 50-session labelled corpus (M2).** This is the gate that can *kill* the M3 plan cheaply, and it is now the only thing standing between us and eleven weeks of engine work. `Q-004` is its prerequisite and is still unanswered: the development corpus contains 18 sessions across 11 branches but **no genuine parallel-agent session**, so we currently have no evidence that concurrent agent branches collide in practice. Do not start `F-021` before this.
 2. 🟠 **`DEBT-017` / `F-019` — a second agent format.** The wedge is vendor-neutrality (`G5`, Review §5.7 rank 6) and we support exactly one vendor. Codex CLI or opencode next; both are cheap because `Session` is already format-agnostic.
 3. 🟠 **Put `land` in front of real users.** The product is usable today and answers a real question for a *single* agent, which is `ADR-009`'s entire argument and the fix for `LIM-009`. Shipping now also grows the corpus `F-020` needs.
-4. 🟠 **`F-032` — GitHub Action / CI mode.** Newly unblocked: `DEBT-015` is closed, so `land queue --store ev.db` now gates on a machine with no transcripts, which is the only environment CI has. This is the shortest path to the buyer (an engineering manager), who lives in CI and not in a local terminal.
+4. ✅ ~~**`F-032` — GitHub Action / CI mode.**~~ Shipped (`LOG-0008`). The follow-on is **`F-033`**: a CI-minutes-saved metric, which is the number that makes this a purchase rather than a curiosity.
 5. 🟡 **`F-016b` — socket API.** Review §5.5: this is how `land` becomes the verification pane inside cmux/amux rather than another thing to open.
 6. 🟡 **`F-029`/`F-030` — signed, shareable bundle.** The artifact exists (`land ui`) and the store is now portable; what is missing is attestation so a reviewer can trust a `.db` they did not produce.
 
@@ -358,6 +362,50 @@ Documentation debt from the review is now closed. New entries below it are **cod
 ## 9. Change Log
 
 > **Append-only.** Newest first. Never edit or delete an existing entry — supersede it with a new one.
+
+---
+
+### `LOG-0008` — 2026-08-15T09:20:00Z
+
+| | |
+|---|---|
+| **Version** | tracker `1.4.0` · `land` `0.1.0` |
+| **Category** | Feature / Security / Architecture |
+| **Files changed** | `src/ci.ts` *(new)*, `action.yml` *(new)*, `.github/workflows/example-land-gate.yml` *(new)*, `test/ci.test.ts` *(new)*, `src/cli.ts`, `src/report.ts`, `README.md`, `PROJECT_TRACKER.md` |
+| **Author** | AI (Claude, Agent SDK) |
+
+**Summary.** Shipped `F-032`: `land ci` plus a composite GitHub Action. Closes `LIM-006`. Also redesigned the HTML report around triage (`LOG-0008b` below) and settled the CodeGraph question as `ADR-033`. 52 tests.
+
+**Reason.** `DEBT-015` made the store readable off-machine, which is the only reason a gate is possible: CI has no agent transcripts. This is the shortest path to the buyer — an engineering manager lives in CI, not in a local terminal — and running in CI is also how the corpus that `Q-004` needs gets acquired, turning a blocking question into a byproduct of shipping.
+
+**Design.** `ADR-031` (policy gate, narrowest default, chain outranks policy) and `ADR-032` (composite action, no `@actions/core`). Exit codes are the contract: 0 clean, 1 violation, 2 broken chain.
+
+**Two bugs in `action.yml` found before anything ran.** `shell: bash` executes with `-e`, so the exit code was being captured after the shell had already aborted — now taken via a `||` list, which errexit exempts. And a hyphenated input read with dot access parses as *subtraction* in a GitHub expression, yielding an empty string and silently disabling the gate; bracket syntax is now used and the reason is commented at the site.
+
+**A real security hole, found because the first test was too weak.** The initial injection test used a malicious *claim sentence* and passed even with escaping deleted — annotation bodies are built from our own summary text, so that string never reached the output. It proved nothing. The attacker-controlled field is the **branch name**, which arrives from transcript JSON and is untrusted external input by design. Rewritten against that vector the test failed: `escapeData` follows GitHub's own toolkit, which leaves doubled colons alone, so a crafted branch name could forge a second workflow command in a runner's log stream. Doubled colons are now percent-encoded while single colons stay readable. **Mutation-tested**: deleting any one of the three escapers fails the test.
+
+**Impact.** Smoke-tested as a runner across the three real shapes: committed store with no transcripts reachable (1 annotation, chain intact at 2,336 events, report written *before* the gate decides), soft-fail adoption, and a tampered store — which exits 2 even under `--fail-on never`.
+
+---
+
+### `LOG-0008b` — 2026-08-15T08:50:00Z
+
+| | |
+|---|---|
+| **Version** | tracker `1.4.0` · `land` `0.1.0` |
+| **Category** | Feature / Fix |
+| **Files changed** | `src/report.ts` |
+| **Author** | AI (Claude, Agent SDK) |
+
+**Summary.** Rebuilt the HTML report around triage after the UI was called bad — correctly. Researched the right comparables (Playwright and Lighthouse HTML reporters, GitHub checks, Vercel builds, Sentry, security scanners) rather than restyling.
+
+**Reason.** The report showed eleven visually identical rows and gave the one that mattered the same weight as ten that did not. On the real corpus 10 of 11 branches are `UNKNOWN` — nothing a reader can act on — and the single actionable branch was buried beneath them. Opening it then showed roughly thirty `VERIFIED` cards *before* the contradiction that made someone open it.
+
+**What changed.** The worst finding is hoisted into an extracted card above the list, the way Vercel lifts a build error out of a log. Verdict counts became filter chips, so the summary *does* something instead of being a wall of numbers. Settled branches collapse behind a disclosure with a count (Lighthouse's treatment of passed audits). Findings sort worst-first inside a session and deduplicate: one sentence yields several findings because "lint clean, 27 tests pass" is judged per activity, so identical (verdict, sentence, evidence) triples now collapse — the worst branch went from 31 cards to 19. Commands wrap with a hanging indent instead of clipping, because the end of a pipeline is usually what decides the verdict.
+
+**Three honesty defects fixed in passing.** The chips counted *claims* but matched on branch worst-verdict, so `verified 84` would have selected zero branches — the same lie the old "Verified 0" tally told; rows now carry every verdict they contain. `UNKNOWN` wore a `?`, which reads as an error on the ten of eleven branches where the honest answer is "nothing to report"; it is now an en dash, per forensic-UI convention for abstention. And `--ink-faint` measured 3.49:1 (dark) and 3.08:1 (light) on 10.5–11.5px labels — normal text under WCAG, so **failing AA against our own stated rule**; measured and repinned to 4.92 / 4.53.
+
+**Verified in a browser, not asserted.** Desktop and 390px, light and dark, JavaScript disabled (11 rows, native `<details>`, and zero dead copy buttons — they are injected by JS precisely so a no-JS reader never meets a control that cannot work), 2px focus ring on every control in logical order, chips resolving to 1/6/10 branches.
 
 ---
 

@@ -1,0 +1,97 @@
+# The suite that has to pass before anything merges.
+#
+# Deliberately small. This project ships a CI gate, so its own CI should be the
+# thing it claims to be: a few checks that would actually catch a regression,
+# with nothing in it for show. No coverage badge, no linter the repo does not
+# have, no matrix of platforms the tool does not target.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A superseded run tells you nothing, and cancelling frees a runner.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 24 is the floor `package.json` declares, and CI is what proves it.
+        # That field previously said 22.6 and was simply false: unflagged
+        # TypeScript stripping arrived in 23.6 and stable `node:sqlite` in 24,
+        # so every `.ts` entrypoint died with ERR_UNKNOWN_FILE_EXTENSION.
+        # `lts/*` catches what users will actually run.
+        node: ['24', 'lts/*']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # `npm ci` needs a lockfile; the only dependencies are typescript and
+      # @types/node, so this stays fast.
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+  artifact:
+    name: Report is self-contained
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: npm
+      - run: npm ci
+
+      # The report's central promise is that it opens anywhere, offline, forever.
+      # That is a property of the emitted bytes, so it is checked on the bytes
+      # rather than trusted. A runner has no agent transcripts, which is exactly
+      # the empty-corpus path worth exercising.
+      - name: Generate a report on an empty corpus
+        env:
+          LAND_TRANSCRIPT_ROOT: ${{ runner.temp }}/no-transcripts
+        run: node src/cli.ts ui --all --no-open --out "$RUNNER_TEMP/report.html"
+
+      - name: Assert it fetches nothing
+        run: |
+          f="$RUNNER_TEMP/report.html"
+          test -s "$f" || { echo "::error::report was not written"; exit 1; }
+
+          # Any of these would make the document depend on a network or a file
+          # beside it, which breaks the one promise the artifact makes.
+          if grep -nEo '(src|href|action|poster|formaction)[[:space:]]*=|@import|url\(' "$f"; then
+            echo "::error::report references an external resource"
+            exit 1
+          fi
+
+          echo "self-contained: $(wc -c < "$f") bytes, zero external references"
+
+      - name: Assert the CLI still gates
+        run: |
+          # Exit codes are the contract every consumer depends on. 64 for a bad
+          # flag proves the gate refuses to silently stop gating.
+          node src/cli.ts ci --fail-on nonsense >/dev/null 2>&1 && {
+            echo "::error::an invalid --fail-on was accepted"; exit 1; }
+          code=0
+          node src/cli.ts ci --fail-on nonsense >/dev/null 2>&1 || code=$?
+          test "$code" = "64" || { echo "::error::expected exit 64, got $code"; exit 1; }
+          echo "invalid policy correctly rejected with exit 64"

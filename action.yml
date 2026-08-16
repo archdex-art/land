@@ -1,0 +1,106 @@
+name: land — verify agent execution claims
+description: >-
+  Reconcile what an AI coding agent claimed against what it observably ran, and
+  gate the build on the result. Reads a hash-chained evidence store, so it works
+  in CI where the agent's transcripts do not exist.
+author: land
+
+branding:
+  icon: check-circle
+  color: red
+
+# A composite action, not a JavaScript action. A JS action would have to ship a
+# bundled `dist/` built by ncc, which means committing generated code and asking
+# a reviewer to trust a blob — an unreasonable ask from a tool whose entire
+# proposition is verifiable evidence. This runs the source directly on the
+# runner's own Node, which is also how `ADR-022` keeps the dependency count at 0.
+runs:
+  using: composite
+  steps:
+    - name: Verify agent execution claims
+      id: land
+      shell: bash
+      # `land ci` sets its own exit code: 0 clean, 1 policy violation, 2 broken
+      # chain. GitHub runs `shell: bash` with `-e`, which would abort before the
+      # code could be inspected, so it is captured with `|| code=$?` — a `||`
+      # list is exempt from errexit — and re-raised after the soft-fail check.
+      #
+      # Hyphenated inputs are read as `inputs['fail-on']`, never `inputs.fail-on`:
+      # the latter parses as subtraction in a GitHub expression and silently
+      # yields an empty string, which would disable the gate.
+      run: |
+        code=0
+        node "${{ github.action_path }}/src/cli.ts" ci \
+          --store "${{ inputs.store }}" \
+          --fail-on "${{ inputs['fail-on'] }}" \
+          ${{ inputs.report != '' && format('--out "{0}"', inputs.report) || '' }} \
+          ${{ inputs.all == 'true' && '--all' || '' }} \
+          ${{ inputs.repo != '' && format('--repo "{0}"', inputs.repo) || '' }} || code=$?
+        if [ "${{ inputs['soft-fail'] }}" = "true" ] && [ "$code" = "1" ]; then
+          echo "::notice::land found violations; soft-fail is on, so the build continues."
+          exit 0
+        fi
+        exit "$code"
+
+inputs:
+  store:
+    description: >-
+      Path to the hash-chained evidence store produced by `land ingest`. Commit
+      it, or download it as an artifact from the job that ran the agents.
+    required: false
+    default: .land/evidence.db
+  fail-on:
+    description: >-
+      Worst verdict tolerated before the build fails. `contradicted` (default)
+      fails only when an agent claimed success for a run that demonstrably
+      failed. `unsupported` also fails on claims with no matching command.
+      `unknown` additionally fails on anything the transcript cannot settle,
+      which is strict and usually wrong to start with. `never` reports only.
+    required: false
+    default: contradicted
+  report:
+    description: >-
+      Where to write the self-contained HTML evidence report. Written before the
+      gate decides, so a failing run still leaves the artifact that explains it.
+    required: false
+    default: ''
+  repo:
+    description: Repository to analyse. Defaults to the workspace.
+    required: false
+    default: ''
+  all:
+    description: Analyse every session in the store, not just this repository.
+    required: false
+    default: 'false'
+  soft-fail:
+    description: >-
+      Report violations without failing the build. A broken evidence chain still
+      fails: that is tampering or corruption, not a policy question.
+    required: false
+    default: 'false'
+
+outputs:
+  passed:
+    description: '`true` when no violation and the chain verifies.'
+    value: ${{ steps.land.outputs.passed }}
+  worst-verdict:
+    description: Worst verdict across all branches.
+    value: ${{ steps.land.outputs.worst-verdict }}
+  violations:
+    description: Number of branches violating the policy.
+    value: ${{ steps.land.outputs.violations }}
+  contradicted:
+    description: Claims contradicted by an observed run.
+    value: ${{ steps.land.outputs.contradicted }}
+  unsupported:
+    description: Claims with no matching command anywhere in the transcript.
+    value: ${{ steps.land.outputs.unsupported }}
+  unknown:
+    description: Claims the transcript cannot settle.
+    value: ${{ steps.land.outputs.unknown }}
+  verified:
+    description: Claims backed by an observed successful run.
+    value: ${{ steps.land.outputs.verified }}
+  chain-ok:
+    description: '`false` when the evidence chain diverges.'
+    value: ${{ steps.land.outputs.chain-ok }}

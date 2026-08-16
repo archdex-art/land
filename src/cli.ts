@@ -13,15 +13,16 @@
 
 import { parseArgs } from 'node:util';
 import { dirname, join, resolve } from 'node:path';
-import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { allTranscripts, transcriptsFor } from './discover.ts';
 import { readTranscript, type Session } from './transcript.ts';
 import { badge, groupBranches, reconcile, type SessionReport } from './reconcile.ts';
 import { renderQueue, renderSession } from './render.ts';
-import { renderReport } from './report.ts';
+import { renderReport, type ReportMeta } from './report.ts';
 import { EvidenceStore } from './store.ts';
+import { annotations, evaluate, isPolicy, outputs, plain, summary, type CiResult, type Policy } from './ci.ts';
 
 const OUTPUT_VERSION = 1;
 
@@ -45,6 +46,10 @@ usage
   land verify   [--store <path>] [--json]
       Recompute the evidence chain and report the first divergence.
 
+  land ci       [--store <path>] [--fail-on <verdict>] [--out <file>] [--json]
+      Gate a build. Exits 1 on a policy violation, 2 on a broken evidence
+      chain. Writes GitHub annotations, a job summary, and step outputs.
+
 options
   --repo <path>     repository to analyse (default: cwd)
   --branch <name>   restrict to one git branch
@@ -58,6 +63,7 @@ options
   --no-open         write the report but do not launch a browser
   --json            machine-readable output
   --limit <n>       max sessions to read (default 200)
+  --fail-on <v>     ci gate: contradicted (default) · unsupported · unknown · never
 
 verdicts
   ✓ VERIFIED      claim backed by an observed run that succeeded
@@ -82,6 +88,23 @@ interface Options {
   limit: number;
   out: string | undefined;
   open: boolean;
+  /** `land ci` gate: the worst verdict tolerated before the build fails. */
+  failOn: Policy;
+}
+
+/**
+ * Read the gate policy, rejecting anything unrecognised.
+ *
+ * A mistyped `--fail-on contradictions` must not silently fall back to the
+ * default: a gate that quietly stops gating is worse than no gate, because the
+ * green check is then a lie the whole pipeline trusts.
+ */
+function readPolicy(value: string | undefined): Policy {
+  if (value === undefined) return 'contradicted';
+  if (!isPolicy(value)) {
+    throw new Error(`Unknown --fail-on value '${value}'. Expected contradicted, unsupported, unknown, or never`);
+  }
+  return value;
 }
 
 function parse(argv: string[]): { command: string; options: Options } {
@@ -100,6 +123,7 @@ function parse(argv: string[]): { command: string; options: Options } {
       // for `--no-<name>`, and a flag that silently fails is worse than a plain one.
       'no-open': { type: 'boolean', default: false },
       limit: { type: 'string' },
+      'fail-on': { type: 'string' },
       help: { type: 'boolean', short: 'h', default: false },
     },
   });
@@ -118,6 +142,7 @@ function parse(argv: string[]): { command: string; options: Options } {
       limit: values.limit === undefined ? 200 : Number(values.limit),
       out: values.out === undefined ? undefined : resolve(values.out),
       open: values['no-open'] !== true,
+      failOn: readPolicy(values['fail-on']),
     },
   };
 }
@@ -378,20 +403,26 @@ function launch(path: string): void {
   child.unref();
 }
 
+/** Report header fields. Shared so `ui` and `ci` cannot describe the same run differently. */
+function reportMeta(options: Options): ReportMeta {
+  const store = existsSync(options.store) ? new EvidenceStore(options.store) : undefined;
+  try {
+    return {
+      repo: options.all ? 'all repositories on this machine' : options.repo,
+      generatedAt: `${new Date().toISOString().replace('T', ' ').slice(0, 19)}Z`,
+      chainHead: store?.headHash(),
+      version: OUTPUT_VERSION === 1 ? '0.1.0' : String(OUTPUT_VERSION),
+    };
+  } finally {
+    store?.close();
+  }
+}
+
 async function cmdUi(options: Options): Promise<number> {
   const reports = await load(options);
   const out = options.out ?? join(tmpdir(), `land-${Date.now()}.html`);
-  const store = existsSync(options.store) ? new EvidenceStore(options.store) : undefined;
-  const meta = {
-    repo: options.all ? 'all repositories on this machine' : options.repo,
-    generatedAt: new Date().toISOString().replace('T', ' ').slice(0, 19) + 'Z',
-    chainHead: store?.headHash(),
-    version: OUTPUT_VERSION === 1 ? '0.1.0' : String(OUTPUT_VERSION),
-  };
-  store?.close();
-
   mkdirSync(dirname(out), { recursive: true });
-  writeFileSync(out, renderReport(reports, meta), 'utf8');
+  writeFileSync(out, renderReport(reports, reportMeta(options)), 'utf8');
 
   const attention = reports.filter((r) => {
     const v = badge(r).verdict;
@@ -426,6 +457,71 @@ function cmdVerify(options: Options): number {
   }
 }
 
+/**
+ * `land ci` — the gate. One command a workflow can call, emitting every dialect
+ * a runner understands, and exiting on a policy rather than a hardcoded rule.
+ *
+ * Exit codes are the contract: 0 clean, 1 policy violation, 2 broken chain. A
+ * broken chain outranks a violation because it means the evidence itself cannot
+ * be trusted, which is a different and worse problem than an agent overstating.
+ */
+async function cmdCi(options: Options): Promise<number> {
+  const reports = await load(options);
+
+  // Chain state is only meaningful when a store was actually read.
+  let chain: CiResult['chain'];
+  if (options.storeExplicit && existsSync(options.store)) {
+    const store = new EvidenceStore(options.store);
+    try {
+      const v = store.verify();
+      chain = v.ok ? { ok: true, events: v.events } : { ok: false, events: 0, brokenAt: v.brokenAt };
+    } finally {
+      store.close();
+    }
+  }
+
+  const result: CiResult = { ...evaluate(reports, options.failOn), chain };
+
+  // The report is written before the gate decides, so a failing run still leaves
+  // the artifact that explains why it failed.
+  let reportPath: string | undefined;
+  if (options.out !== undefined) {
+    mkdirSync(dirname(options.out), { recursive: true });
+    writeFileSync(options.out, renderReport(reports, reportMeta(options)));
+    reportPath = options.out;
+  }
+
+  if (options.json) {
+    process.stdout.write(`${JSON.stringify({ version: OUTPUT_VERSION, policy: options.failOn, ...result }, null, 2)}\n`);
+  } else {
+    for (const line of annotations(result)) process.stdout.write(`${line}\n`);
+    process.stdout.write(plain(result, options.failOn));
+  }
+
+  // Append, never truncate: other steps write to these same files.
+  appendEnvFile(process.env['GITHUB_STEP_SUMMARY'], summary(result, options.failOn, reportPath));
+  appendEnvFile(process.env['GITHUB_OUTPUT'], outputs(result));
+
+  if (result.chain?.ok === false) return 2;
+  return result.violations.length > 0 ? 1 : 0;
+}
+
+/**
+ * Append to a runner-provided file, if the runner provided one.
+ *
+ * Failure here must not fail the gate: a summary that cannot be written is a
+ * cosmetic loss, and turning it into a build failure would make the tool less
+ * trustworthy than the thing it audits.
+ */
+function appendEnvFile(path: string | undefined, content: string): void {
+  if (path === undefined || path === '') return;
+  try {
+    appendFileSync(path, content);
+  } catch (error) {
+    process.stderr.write(`land: could not write ${path}: ${(error as Error).message}\n`);
+  }
+}
+
 async function main(): Promise<number> {
   // A mistyped flag is a user error, not a crash: `parseArgs` throws, and an
   // unhandled throw prints a Node stack trace at someone who wanted `--help`.
@@ -449,6 +545,8 @@ async function main(): Promise<number> {
       return cmdUi(options);
     case 'ingest':
       return cmdIngest(options);
+    case 'ci':
+      return cmdCi(options);
     case 'verify':
       return cmdVerify(options);
     case 'help':
