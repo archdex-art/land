@@ -1,0 +1,109 @@
+# Example: gate a pull request on what the agent actually ran.
+#
+# This is the shape a consumer copies, not a workflow this repository needs. The
+# awkward part is deliberate and worth understanding: `land` reads agent session
+# transcripts, and those live on whichever machine ran the agent. A CI runner has
+# none. So evidence has to *travel*, and there are exactly two honest ways to do
+# it — both shown below.
+
+name: Example — land gate
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # A) The agent ran on a developer's machine.
+  #
+  # They run `land ingest --store .land/evidence.db` and commit it. The store is
+  # append-only and secrets are redacted before write, so committing it is safe;
+  # it is also the only artifact that survives the transcript being rotated away.
+  # ---------------------------------------------------------------------------
+  committed-store:
+    name: Gate on the committed evidence store
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - id: land
+        uses: ./ # in a consumer repo: archdex-art/land@v1
+        with:
+          store: .land/evidence.db
+          fail-on: contradicted
+          report: land-report.html
+
+      # `if: always()` because the report is most valuable exactly when the gate
+      # failed — that run is the one someone has to explain.
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: land-evidence-report
+          path: land-report.html
+
+      - if: always()
+        run: |
+          echo "passed=${{ steps.land.outputs.passed }}"
+          echo "worst=${{ steps.land.outputs.worst-verdict }}"
+          echo "contradicted=${{ steps.land.outputs.contradicted }}"
+
+  # ---------------------------------------------------------------------------
+  # B) The agent ran in CI.
+  #
+  # Then transcripts exist in this job and `land` can ingest them directly. Note
+  # `if: always()` on the ingest step: an agent whose build failed is precisely
+  # the one whose claims are worth checking.
+  # ---------------------------------------------------------------------------
+  agent-in-ci:
+    name: Ingest this job's own agent session
+    runs-on: ubuntu-latest
+    if: false # illustrative — enable when an agent step exists in this job
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run the coding agent
+        run: echo "claude -p 'fix the failing test' # or any agent that writes transcripts"
+
+      - name: Record what it actually ran
+        if: always()
+        run: node src/cli.ts ingest --all --store "$RUNNER_TEMP/evidence.db"
+
+      - name: Gate
+        if: always()
+        uses: ./
+        with:
+          store: ${{ runner.temp }}/evidence.db
+          all: 'true'
+          fail-on: contradicted
+
+  # ---------------------------------------------------------------------------
+  # C) Adoption mode.
+  #
+  # Start here on an existing repository. `soft-fail` annotates without blocking,
+  # so a team can see what `land` says for a week before it can stop a merge.
+  # Flipping this to a hard gate later is a one-line change.
+  # ---------------------------------------------------------------------------
+  observe-only:
+    name: Report without blocking
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: ./
+        with:
+          store: .land/evidence.db
+          fail-on: unsupported
+          soft-fail: 'true'
