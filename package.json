@@ -8,7 +8,7 @@
     "land": "./src/cli.ts"
   },
   "engines": {
-    "node": ">=22.6.0"
+    "node": ">=24.0.0"
   },
   "scripts": {
     "test": "node --test \"test/*.test.ts\"",

@@ -28,7 +28,7 @@ the agent's own vendor, takes that summary at face value.
 
 ## Install
 
-Needs Node ≥ 22.6 and nothing else. No daemon, no account, no build step.
+Needs Node ≥ 24 and nothing else. No daemon, no account, no build step.
 
 ```sh
 git clone <this repo> && cd land
