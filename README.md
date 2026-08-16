@@ -43,12 +43,12 @@ land evidence --branch fix/auth   # every claim, its verdict, the command behind
 land ui                           # self-contained HTML report — open or share
 land ingest                       # append sessions to the hash-chained evidence store
 land verify                       # recompute the chain, report the first divergence
+land ci                           # gate a build: annotations, job summary, exit code
 ```
 
 Every command takes `--json`, and every surface reports the same rows — one per
-(repo, branch) pair. Exit code is `1` when something needs reading and `2` when
-the evidence chain is broken, independent of output format, so `land queue --json`
-works as a CI gate.
+(repo, branch) pair. Exit codes are the contract and do not depend on output
+format: `0` clean, `1` something needs reading, `2` the evidence chain is broken.
 
 ### Two sources
 
@@ -87,6 +87,29 @@ Measured on the 18 real sessions in this repository's development corpus: 84
 `VERIFIED`, 7 `UNKNOWN`, 1 `CONTRADICTED` (a true positive), **0 false
 accusations**. The two false positives found during development are documented as
 regression comments in `src/claims.ts` — they were both the word "check".
+
+## CI
+
+```yaml
+- uses: archdex-art/land@v1
+  with:
+    store: .land/evidence.db
+    fail-on: contradicted     # or unsupported · unknown · never
+    report: land-report.html
+```
+
+The gate is a policy, not a fixed rule. `contradicted` — the default — fails only
+when an agent claimed success for a run that demonstrably failed. Nobody can
+adopt a tool that fails builds on `unknown`, because most sessions are
+legitimately unverifiable, so that strictness is opt-in.
+
+A broken evidence chain exits `2` and outranks every policy including `never`:
+tampered evidence is not a policy question.
+
+Because CI has no agent transcripts, evidence has to travel. Either commit the
+store (append-only, secrets redacted before write) or upload it as an artifact
+from the job that ran the agents. `.github/workflows/example-land-gate.yml`
+shows both, plus a `soft-fail` mode for adopting on an existing repository.
 
 ## HTML report
 
@@ -152,6 +175,7 @@ src/discover.ts     locate transcripts for a repository
 src/html.ts         tagged-template escaping (security boundary — XSS defence)
 src/report.ts       self-contained HTML report generator
 src/render.ts       terminal output
+src/ci.ts           CI gate: policy, annotations, job summary, step outputs
 src/cli.ts          commands, JSON contract
 ```
 
@@ -175,7 +199,7 @@ documented upstream:
 node --test "test/*.test.ts"
 ```
 
-44 tests. The reconciliation tests are the specification; the html.ts tests
+52 tests. The reconciliation tests are the specification; the html.ts tests
 encode the XSS defence contract.
 
 ## License
